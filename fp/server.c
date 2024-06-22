@@ -221,6 +221,7 @@ void handle_join(ClientInfo *cli) {
 }
 
 void handle_delete(ClientInfo *cli) {
+    printf("masuk handle_delete");
     char *type = strtok(NULL, " ");
     if (strcmp(type, "CHANNEL") == 0) {
         char *channel = strtok(NULL, " ");
@@ -267,7 +268,7 @@ void *handle_client(void *arg) {
     while ((n = read(cli->socket, buffer, sizeof(buffer) - 1)) > 0) {
         buffer[n] = '\0';
         printf("Pesan dari client: %s\n", buffer);
-
+        printf("tes 123 setelah pesan dari client");
         char *command = strtok(buffer, " ");
         if (!command) {
             const char *response = "Perintah tidak dikenali";
@@ -287,6 +288,7 @@ void *handle_client(void *arg) {
             handle_join(cli);
         } else if (strcmp(command, "DEL") == 0) {
             handle_delete(cli);
+            printf("masuk if statement");
         } else if (strcmp(command, "EXIT") == 0) {
             handle_exit(cli);
             break;
@@ -1178,19 +1180,38 @@ void delete_channel(const char *channel, ClientInfo *client) {
         return;
     }
 
+    printf("masuk delete");
     while (fgets(line, sizeof(line), channels_file)) {
-        char *token = strtok(line, ",");
-        token = strtok(NULL, ",");
-        if (token && strcmp(token, channel) != 0) {
-            fprintf(temp_file, "%s", line);
+    char *token = strtok(line, ",");
+    token = strtok(NULL, ",");
+    if (token && strcmp(token, channel) != 0) {
+        fprintf(temp_file, "%s", line);
+    }
+
+    char buffer[50];
+    int max_len = sizeof(buffer);
+
+    int j = snprintf(buffer, max_len, "Token: %s , line: %s\n", token, line);
+
+    if (j >= max_len) {
+        printf("Buffer overflow! Increase buffer size.\n");
+        // Handle the overflow appropriately (e.g., truncate or resize).
+    } else {
+        // Copy buffer contents to response
+        char response[max_len];
+        strncpy(response, buffer, max_len);
+        response[max_len - 1] = '\0'; // Ensure null-terminated string
+        if (write(client->socket, response, strlen(response)) < 0) {
+            printf("Unable to send response to client\n");
         }
     }
+}
 
     fclose(channels_file);
     fclose(temp_file);
 
-    remove(CHANNELS_FILE);
-    rename(temp_path, CHANNELS_FILE);
+    // remove(CHANNELS_FILE);
+    // rename(temp_path, CHANNELS_FILE);
 
     char response[100];
     snprintf(response, sizeof(response), "%s berhasil dihapus", channel);
