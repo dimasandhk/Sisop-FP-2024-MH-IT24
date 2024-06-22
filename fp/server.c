@@ -24,44 +24,42 @@ typedef struct {
     char logged_in_role[10];
     char logged_in_channel[50];
     char logged_in_room[50];
-} client_info;
+} ClientInfo;
 
-client_info *clients[5];
+#define MAX_CLIENTS 5
+ClientInfo *clients[MAX_CLIENTS];
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *handle_client(void *arg);
 void daemonize();
 
-void register_user(const char *username, const char *password, client_info *client);
-void login_user(const char *username, const char *password, client_info *client);
+void register_user(const char *username, const char *password, ClientInfo *client);
+void login_user(const char *username, const char *password, ClientInfo *client);
 
-void create_directory(const char *path, client_info *client);
-void create_channel(const char *username, const char *channel, const char *key, client_info *client);
-void create_room(const char *username, const char *channel, const char *room, client_info *client);
-void list_channels(client_info *client);
-void list_rooms(const char *channel, client_info *client);
-void list_users(const char *channel, client_info *client);
-void join_channel(const char *username, const char *channel, client_info *client);
-void verify_key(const char *username, const char *channel, const char *key, client_info *client);
-void join_room(const char *channel, const char *room, client_info *client);
+void create_directory(const char *path, ClientInfo *client);
+void create_channel(const char *username, const char *channel, const char *key, ClientInfo *client);
+void create_room(const char *username, const char *channel, const char *room, ClientInfo *client);
+void list_channels(ClientInfo *client);
+void list_rooms(const char *channel, ClientInfo *client);
+void list_users(const char *channel, ClientInfo *client);
+void join_channel(const char *username, const char *channel, ClientInfo *client);
+void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client);
+void join_room(const char *channel, const char *room, ClientInfo *client);
 
 void delete_directory(const char *path);
-void delete_channel(const char *channel, client_info *client);
-void delete_room(const char *channel, const char *room, client_info *client);
-void delete_all_rooms(const char *channel, client_info *client);
+void delete_channel(const char *channel, ClientInfo *client);
+void delete_room(const char *channel, const char *room, ClientInfo *client);
+void delete_all_rooms(const char *channel, ClientInfo *client);
 void log_activity(const char *channel, const char *message);
 
-void list_users_root(client_info *client);
+void list_users_root(ClientInfo *client);
 
-void handle_exit(client_info *client);
+void handle_exit(ClientInfo *client);
 
-int main() {
-    daemonize();
-
+void start_server() {
     int server_fd, new_socket;
     struct sockaddr_in address;
     socklen_t addr_len = sizeof(address);
-    pthread_t tid;
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == 0) {
@@ -84,13 +82,14 @@ int main() {
     }
 
     while (1) {
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addr_len)) < 0) {
+        new_socket = accept(server_fd, (struct sockaddr *)&address, &addr_len);
+        if (new_socket < 0) {
             perror("Unable to accept");
             exit(EXIT_FAILURE);
         }
 
         pthread_t tid;
-        client_info *client = (client_info *)malloc(sizeof(client_info));
+        ClientInfo *client = (ClientInfo *)malloc(sizeof(ClientInfo));
         client->socket = new_socket;
         client->address = address;
         memset(client->logged_in_user, 0, sizeof(client->logged_in_user));
@@ -100,7 +99,11 @@ int main() {
 
         pthread_create(&tid, NULL, handle_client, (void *)client);
     }
+}
 
+int main() {
+    daemonize();
+    start_server();
     return 0;
 }
 
@@ -108,23 +111,20 @@ void daemonize() {
     pid_t pid, sid;
 
     pid = fork();
-
     if (pid < 0) {
         exit(EXIT_FAILURE);
     }
-
     if (pid > 0) {
         exit(EXIT_SUCCESS);
     }
 
     umask(0);
-
     sid = setsid();
     if (sid < 0) {
         exit(EXIT_FAILURE);
     }
 
-    if ((chdir("/")) < 0) {
+    if (chdir("/") < 0) {
         exit(EXIT_FAILURE);
     }
 
@@ -140,182 +140,159 @@ void daemonize() {
     dup2(log_fd, STDERR_FILENO);
 }
 
+void handle_register(ClientInfo *cli) {
+    char *username = strtok(NULL, " ");
+    char *password = strtok(NULL, " ");
+    if (username && password) {
+        register_user(username, password, cli);
+    } else {
+        const char *response = "Format perintah REGISTER tidak valid";
+        write(cli->socket, response, strlen(response));
+    }
+}
+
+void handle_login(ClientInfo *cli) {
+    char *username = strtok(NULL, " ");
+    char *password = strtok(NULL, " ");
+    if (username && password) {
+        login_user(username, password, cli);
+    } else {
+        const char *response = "Format perintah LOGIN tidak valid";
+        write(cli->socket, response, strlen(response));
+    }
+}
+
+void handle_create(ClientInfo *cli) {
+    char *type = strtok(NULL, " ");
+    if (strcmp(type, "CHANNEL") == 0) {
+        char *channel = strtok(NULL, " ");
+        char *key = strtok(NULL, " ");
+        if (channel && key) {
+            create_channel(cli->logged_in_user, channel, key, cli);
+        } else {
+            const char *response = "Penggunaan perintah: CREATE CHANNEL <channel> -k <key>";
+            write(cli->socket, response, strlen(response));
+        }
+    } else if (strcmp(type, "ROOM") == 0) {
+        char *room = strtok(NULL, " ");
+        if (room) {
+            create_room(cli->logged_in_user, cli->logged_in_channel, room, cli);
+        } else {
+            const char *response = "Penggunaan perintah: CREATE ROOM <room>";
+            write(cli->socket, response, strlen(response));
+        }
+    } else {
+        const char *response = "Format perintah CREATE tidak valid";
+        write(cli->socket, response, strlen(response));
+    }
+}
+
+void handle_list(ClientInfo *cli) {
+    char *type = strtok(NULL, " ");
+    if (strcmp(type, "CHANNEL") == 0) {
+        list_channels(cli);
+    } else if (strcmp(type, "ROOM") == 0) {
+        list_rooms(cli->logged_in_channel, cli);
+    } else if (strcmp(type, "USER") == 0) {
+        if (strstr(cli->logged_in_role, "ROOT")) {
+            list_users_root(cli);
+        } else {
+            list_users(cli->logged_in_channel, cli);
+        }
+    } else {
+        const char *response = "Format perintah LIST tidak valid";
+        write(cli->socket, response, strlen(response));
+    }
+}
+
+void handle_join(ClientInfo *cli) {
+    char *name = strtok(NULL, " ");
+    if (!name) {
+        const char *response = "Format perintah JOIN tidak valid";
+        write(cli->socket, response, strlen(response));
+        return;
+    }
+
+    if (strlen(cli->logged_in_channel) == 0) {
+        join_channel(cli->logged_in_user, name, cli);
+    } else {
+        join_room(cli->logged_in_channel, name, cli);
+    }
+}
+
+void handle_delete(ClientInfo *cli) {
+    char *type = strtok(NULL, " ");
+    if (strcmp(type, "CHANNEL") == 0) {
+        char *channel = strtok(NULL, " ");
+        if (strlen(cli->logged_in_channel) > 0 || strlen(cli->logged_in_room) > 0) {
+            const char *response = "Anda harus keluar dari channel";
+            write(cli->socket, response, strlen(response));
+        } else if (channel) {
+            delete_channel(channel, cli);
+        } else {
+            const char *response = "Penggunaan perintah: DEL CHANNEL <channel>";
+            write(cli->socket, response, strlen(response));
+        }
+    } else if (strcmp(type, "ROOM") == 0) {
+        char *room = strtok(NULL, " ");
+        if (strcmp(room, "ALL") == 0) {
+            if (strlen(cli->logged_in_room) > 0 || strlen(cli->logged_in_channel) == 0) {
+                const char *response = "You must leave the room or join a channel first";
+                write(cli->socket, response, strlen(response));
+            } else {
+                delete_all_rooms(cli->logged_in_channel, cli);
+            }
+        } else {
+            if (strlen(cli->logged_in_room) > 0 || strlen(cli->logged_in_channel) == 0) {
+                const char *response = "You must leave the room or join a channel first";
+                write(cli->socket, response, strlen(response));
+            } else if (room) {
+                delete_room(cli->logged_in_channel, room, cli);
+            } else {
+                const char *response = "Penggunaan perintah: DEL ROOM <room>";
+                write(cli->socket, response, strlen(response));
+            }
+        }
+    } else {
+        const char *response = "Format perintah DEL tidak valid";
+        write(cli->socket, response, strlen(response));
+    }
+}
+
 void *handle_client(void *arg) {
-    client_info *cli = (client_info *)arg;
+    ClientInfo *cli = (ClientInfo *)arg;
     char buffer[10240];
     int n;
 
-    while ((n = read(cli->socket, buffer, sizeof(buffer))) > 0) {
+    while ((n = read(cli->socket, buffer, sizeof(buffer) - 1)) > 0) {
         buffer[n] = '\0';
         printf("Pesan dari client: %s\n", buffer);
 
-        char *token = strtok(buffer, " ");
-        if (token == NULL) {
-            char response[] = "Perintah tidak dikenali";
-            if (write(cli->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
-            }
+        char *command = strtok(buffer, " ");
+        if (!command) {
+            const char *response = "Perintah tidak dikenali";
+            write(cli->socket, response, strlen(response));
             continue;
         }
 
-        if (strcmp(token, "REGISTER") == 0) {
-            char *username = strtok(NULL, " ");
-            char *password = strtok(NULL, " ");
-            register_user(username, password, cli);
-        } else if (strcmp(token, "LOGIN") == 0) {
-            char *username = strtok(NULL, " ");
-            char *password = strtok(NULL, " ");
-            if (username == NULL || password == NULL) {
-                char response[] = "Format perintah LOGIN tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-                continue;
-            }
-            login_user(username, password, cli);
-        } else if (strcmp(token, "CREATE") == 0) {
-            token = strtok(NULL, " ");
-            if (token == NULL) {
-                char response[] = "Format perintah CREATE tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-                continue;
-            }
-            if (strcmp(token, "CHANNEL") == 0) {
-                char *channel = strtok(NULL, " ");
-                token = strtok(NULL, " ");
-                char *key = strtok(NULL, " ");
-                if (channel == NULL || key == NULL) {
-                    char response[] = "Penggunaan perintah: CREATE CHANNEL <channel> -k <key>";
-                    if (write(cli->socket, response, strlen(response)) < 0) {
-                        perror("Unable to send responds to client");
-                    }
-                    continue;
-                }
-                create_channel(cli->logged_in_user, channel, key, cli);
-            } else if (strcmp(token, "ROOM") == 0) {
-                char *room = strtok(NULL, " ");
-                if (room == NULL) {
-                    char response[] = "Penggunaan perintah: CREATE ROOM <room>";
-                    if (write(cli->socket, response, strlen(response)) < 0) {
-                        perror("Unable to send responds to client");
-                    }
-                    continue;
-                }
-                create_room(cli->logged_in_user, cli->logged_in_channel, room, cli);
-            } else {
-                char response[] = "Format perintah CREATE tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-            }
-        } else if(strcmp(token, "LIST") == 0){
-            token = strtok(NULL, " ");
-            if (token == NULL) {
-                char response[] = "Format perintah LIST tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-                continue;
-            }
-            if (strcmp(token, "CHANNEL") == 0) {
-                list_channels(cli);
-            } else if (strcmp(token, "ROOM") == 0) {
-                list_rooms(cli->logged_in_channel, cli);
-            } else if (strcmp(token, "USER") == 0) {
-                strstr(cli->logged_in_role, "ROOT") != NULL ? list_users_root(cli) : list_users(cli->logged_in_channel, cli);
-            } else {
-                char response[] = "Format perintah LIST tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-            }
-        } else if (strcmp(token, "JOIN") == 0) {
-            token = strtok(NULL, " ");
-            if (token == NULL) {
-                char response[] = "Format perintah JOIN tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-                continue;
-            }
-            if (strlen(cli->logged_in_channel) == 0) {
-                char *channel = token;
-                join_channel(cli->logged_in_user, channel, cli);
-            } else {
-                char *room = token;
-                join_room(cli->logged_in_channel, room, cli);
-            }
-        } else if (strcmp(token, "DEL") == 0) {
-            token = strtok(NULL, " ");
-            if (token == NULL) {
-                char response[] = "Format perintah DEL tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-                continue;
-            }
-            if (strcmp(token, "CHANNEL") == 0) {
-                char *channel = strtok(NULL, " ");
-                if(strlen(cli->logged_in_channel) > 0 || strlen(cli->logged_in_room) > 0){
-                    char response[] = "Anda harus keluar dari channel";
-                    if (write(cli->socket, response, strlen(response)) < 0) {
-                        perror("Unable to send responds to client");
-                    }
-                    continue;
-                } else if(channel == NULL) {
-                    char response[] = "Penggunaan perintah: DEL CHANNEL <channel>";
-                    if (write(cli->socket, response, strlen(response)) < 0) {
-                        perror("Unable to send responds to client");
-                    }
-                    continue;
-                } else {
-                    delete_channel(channel, cli);
-                }
-            } else if (strcmp(token, "ROOM") == 0) {
-                token = strtok(NULL, " ");
-                if (strcmp(token, "ALL") == 0){
-                    if(strlen(cli->logged_in_room) > 0 || strlen(cli->logged_in_channel) == 0){
-                        char response[] = "You must leave the room or join a channel first";
-                        if (write(cli->socket, response, strlen(response)) < 0) {
-                            perror("Unable to send responds to client");
-                        }
-                        continue;
-                    }else{
-                        delete_all_rooms(cli->logged_in_channel, cli);
-                    }
-                } else {
-                    char *room = token;
-                    if(strlen(cli->logged_in_room) > 0 || strlen(cli->logged_in_channel) == 0){
-                        char response[] = "You must leave the room or join a channel first";
-                        if (write(cli->socket, response, strlen(response)) < 0) {
-                            perror("Unable to send responds to client");
-                        }
-                        continue;
-                    } else if(room == NULL) {
-                        char response[] = "Penggunaan perintah: DEL ROOM <room>";
-                        if (write(cli->socket, response, strlen(response)) < 0) {
-                            perror("Unable to send responds to client");
-                        }
-                        continue;
-                    } else {
-                        delete_room(cli->logged_in_channel, room, cli);
-                    }
-                }
-            } else {
-                char response[] = "Format perintah DEL tidak valid";
-                if (write(cli->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-            }
-        } else if (strcmp(token, "EXIT") == 0) {
+        if (strcmp(command, "REGISTER") == 0) {
+            handle_register(cli);
+        } else if (strcmp(command, "LOGIN") == 0) {
+            handle_login(cli);
+        } else if (strcmp(command, "CREATE") == 0) {
+            handle_create(cli);
+        } else if (strcmp(command, "LIST") == 0) {
+            handle_list(cli);
+        } else if (strcmp(command, "JOIN") == 0) {
+            handle_join(cli);
+        } else if (strcmp(command, "DEL") == 0) {
+            handle_delete(cli);
+        } else if (strcmp(command, "EXIT") == 0) {
             handle_exit(cli);
+            break;
         } else {
-            char response[] = "Perintah tidak dikenali";
-            if (write(cli->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
-            }
+            const char *response = "Perintah tidak dikenali";
+            write(cli->socket, response, strlen(response));
         }
     }
 
@@ -324,7 +301,7 @@ void *handle_client(void *arg) {
     pthread_exit(NULL);
 }
 
-void create_directory(const char *path, client_info *client) {
+void create_directory(const char *path, ClientInfo *client) {
     struct stat st = {0};
 
     if (stat(path, &st) == -1) {
@@ -337,7 +314,7 @@ void create_directory(const char *path, client_info *client) {
     }
 }
 
-void register_user(const char *username, const char *password, client_info *client) {
+void register_user(const char *username, const char *password, ClientInfo *client) {
     if (username == NULL || password == NULL) {
         char response[] = "Username or password cannot be empty";
         if (write(client->socket, response, strlen(response)) < 0) {
@@ -411,7 +388,7 @@ void register_user(const char *username, const char *password, client_info *clie
     }
 }
 
-void login_user(const char *username, const char *password, client_info *client) {
+void login_user(const char *username, const char *password, ClientInfo *client) {
     FILE *file = fopen(USERS_FILE, "r");
     if (!file) {
         char response[] = "Tidak dapat membuka file users.csv atau user belum terdaftar";
@@ -462,7 +439,7 @@ void login_user(const char *username, const char *password, client_info *client)
     fclose(file);
 }
 
-void create_channel(const char *username, const char *channel, const char *key, client_info *client) {
+void create_channel(const char *username, const char *channel, const char *key, ClientInfo *client) {
     FILE *channels_file = fopen(CHANNELS_FILE, "r+");
     if (!channels_file) {
         channels_file = fopen(CHANNELS_FILE, "w+");
@@ -582,7 +559,7 @@ void create_channel(const char *username, const char *channel, const char *key, 
     log_activity(channel, log_message);
 }
 
-void create_room(const char *username, const char *channel, const char *room, client_info *client) {
+void create_room(const char *username, const char *channel, const char *room, ClientInfo *client) {
     char auth_path[256];
     snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
 
@@ -666,7 +643,7 @@ void create_room(const char *username, const char *channel, const char *room, cl
     log_activity(channel, log_message);
 }
 
-void list_channels(client_info *client) {
+void list_channels(ClientInfo *client) {
     char path[256];
     strcpy(path, CHANNELS_FILE);
     FILE *channels_file = fopen(path, "r+");
@@ -696,7 +673,7 @@ void list_channels(client_info *client) {
     fclose(channels_file);
 }
 
-void list_rooms(const char *channel, client_info *client) {
+void list_rooms(const char *channel, ClientInfo *client) {
     char path[256];
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
     DIR *dir = opendir(path);
@@ -733,7 +710,7 @@ void list_rooms(const char *channel, client_info *client) {
     closedir(dir);
 }
 
-void list_users(const char *channel, client_info *client) {
+void list_users(const char *channel, ClientInfo *client) {
     char path[256];
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
     FILE *auth_file = fopen(path, "r+");
@@ -763,7 +740,7 @@ void list_users(const char *channel, client_info *client) {
     fclose(auth_file);
 }
 
-void list_users_root(client_info *client) {
+void list_users_root(ClientInfo *client) {
     FILE *users_file = fopen(USERS_FILE, "r+");
     if (users_file == NULL) {
         char response[] = "Unable to open users.csv file";
@@ -791,7 +768,7 @@ void list_users_root(client_info *client) {
     fclose(users_file);
 }
 
-void join_channel(const char *username, const char *channel, client_info *client) {
+void join_channel(const char *username, const char *channel, ClientInfo *client) {
     char channel_path[256];
     snprintf(channel_path, sizeof(channel_path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
     struct stat st;
@@ -955,7 +932,7 @@ void join_channel(const char *username, const char *channel, client_info *client
     }
 }
 
-void verify_key(const char *username, const char *channel, const char *key, client_info *client) {
+void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client) {
     FILE *channels_file = fopen(CHANNELS_FILE, "r");
     if (!channels_file) {
         char response[] = "Unable to open channels.csv file";
@@ -1046,7 +1023,7 @@ void verify_key(const char *username, const char *channel, const char *key, clie
     
 }
 
-void join_room(const char *channel, const char *room, client_info *client) {
+void join_room(const char *channel, const char *room, ClientInfo *client) {
     // Check if the room directory exists
     char room_path[256];
     snprintf(room_path, sizeof(room_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/%s", channel, room);
@@ -1100,7 +1077,7 @@ void delete_directory(const char *path) {
     rmdir(path);
 }
 
-void delete_channel(const char *channel, client_info *client) {
+void delete_channel(const char *channel, ClientInfo *client) {
     FILE *users_file = fopen(USERS_FILE, "r");
     if (!users_file) {
         char response[] = "Unable to open users.csv file";
@@ -1222,7 +1199,7 @@ void delete_channel(const char *channel, client_info *client) {
     }
 }
 
-void delete_room(const char *channel, const char *room, client_info *client) {
+void delete_room(const char *channel, const char *room, ClientInfo *client) {
         bool is_admin = false;
         bool is_root = false;
         char auth_path[256];
@@ -1292,7 +1269,7 @@ void delete_room(const char *channel, const char *room, client_info *client) {
     log_activity(channel, log_message);
 }
 
-void delete_all_rooms(const char *channel, client_info *client) {
+void delete_all_rooms(const char *channel, ClientInfo *client) {
     char auth_path[256];
     snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
     FILE *auth_file = fopen(auth_path, "r");
@@ -1392,7 +1369,7 @@ void log_activity(const char *channel, const char *message) {
     fclose(log_file);
 }
 
-void handle_exit(client_info *client) {
+void handle_exit(ClientInfo *client) {
     if (strlen(client->logged_in_room) > 0) {
         memset(client->logged_in_room, 0, sizeof(client->logged_in_room));
         char response[10240];
