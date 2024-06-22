@@ -291,7 +291,6 @@ void *handle_client(void *arg) {
             printf("masuk if statement");
         } else if (strcmp(command, "EXIT") == 0) {
             handle_exit(cli);
-            break;
         } else {
             const char *response = "Perintah tidak dikenali";
             write(cli->socket, response, strlen(response));
@@ -862,7 +861,6 @@ void join_channel(const char *username, const char *channel, ClientInfo *client)
         return;
     }
 
-    // Check if user is ADMIN/USER/BANNED in auth.csv
     char auth_path[256];
     snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
     FILE *auth_file = fopen(auth_path, "r");
@@ -1084,7 +1082,7 @@ void delete_channel(const char *channel, ClientInfo *client) {
     if (!users_file) {
         char response[] = "Unable to open users.csv file";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         return;
     }
@@ -1114,7 +1112,7 @@ void delete_channel(const char *channel, ClientInfo *client) {
         if (!auth_file) {
             char response[] = "Unable to open auth.csv file";
             if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
+                perror("Unable to send response to client");
             }
             return;
         }
@@ -1139,7 +1137,7 @@ void delete_channel(const char *channel, ClientInfo *client) {
     if (!is_admin) {
         char response[] = "Anda tidak memiliki izin untuk menghapus channel ini";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         return;
     }
@@ -1150,7 +1148,7 @@ void delete_channel(const char *channel, ClientInfo *client) {
     if (stat(path, &st) == -1 || !S_ISDIR(st.st_mode)) {
         char response[] = "Channel tidak ditemukan";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         return;
     }
@@ -1163,7 +1161,7 @@ void delete_channel(const char *channel, ClientInfo *client) {
     if (!channels_file) {
         char response[] = "Unable to open channels.csv file";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         return;
     }
@@ -1174,49 +1172,34 @@ void delete_channel(const char *channel, ClientInfo *client) {
     if (!temp_file) {
         char response[] = "Unable to create temp file";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         fclose(channels_file);
         return;
     }
 
-    printf("masuk delete");
     while (fgets(line, sizeof(line), channels_file)) {
-    char *token = strtok(line, ",");
-    token = strtok(NULL, ",");
-    if (token && strcmp(token, channel) != 0) {
-        fprintf(temp_file, "%s", line);
-    }
-
-    char buffer[50];
-    int max_len = sizeof(buffer);
-
-    int j = snprintf(buffer, max_len, "Token: %s , line: %s\n", token, line);
-
-    if (j >= max_len) {
-        printf("Buffer overflow! Increase buffer size.\n");
-        // Handle the overflow appropriately (e.g., truncate or resize).
-    } else {
-        // Copy buffer contents to response
-        char response[max_len];
-        strncpy(response, buffer, max_len);
-        response[max_len - 1] = '\0'; // Ensure null-terminated string
-        if (write(client->socket, response, strlen(response)) < 0) {
-            printf("Unable to send response to client\n");
+        char *token = strtok(line, ",");
+        char *line_number = token;
+        token = strtok(NULL, ",");
+        if (token && strcmp(token, channel) != 0) {
+            fprintf(temp_file, "%s,%s", line_number, token);
+            while ((token = strtok(NULL, ",")) != NULL) {
+                fprintf(temp_file, ",%s", token);
+            }
         }
     }
-}
 
     fclose(channels_file);
     fclose(temp_file);
 
-    // remove(CHANNELS_FILE);
-    // rename(temp_path, CHANNELS_FILE);
+    remove(CHANNELS_FILE);
+    rename(temp_path, CHANNELS_FILE);
 
     char response[100];
     snprintf(response, sizeof(response), "%s berhasil dihapus", channel);
     if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
+        perror("Unable to send response to client");
     }
 }
 
