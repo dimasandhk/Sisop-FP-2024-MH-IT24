@@ -14,8 +14,6 @@
 #include <dirent.h>
 #include <time.h>
 
-#define PORT 8080
-#define BUFFER_SIZE 10240
 #define USERS_FILE "/home/dim/uni/sisop/FP/DiscorIT/users.csv"
 #define CHANNELS_FILE "/home/dim/uni/sisop/FP/DiscorIT/channels.csv"
 
@@ -73,7 +71,7 @@ int main() {
 
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
+    address.sin_port = htons(8080);
 
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         perror("Bind failure");
@@ -144,7 +142,7 @@ void daemonize() {
 
 void *handle_client(void *arg) {
     client_info *cli = (client_info *)arg;
-    char buffer[BUFFER_SIZE];
+    char buffer[10240];
     int n;
 
     while ((n = read(cli->socket, buffer, sizeof(buffer))) > 0) {
@@ -439,7 +437,7 @@ void login_user(const char *username, const char *password, client_info *client)
                 token = strtok(NULL, ","); // Role
                 snprintf(client->logged_in_role, sizeof(client->logged_in_role), "%s", token);
 
-                char response[BUFFER_SIZE];
+                char response[10240];
                 snprintf(response, sizeof(response), "%s berhasil login", username);
                 if (write(client->socket, response, strlen(response)) < 0) {
                     perror("Unable to send responds to client");
@@ -653,7 +651,7 @@ void create_room(const char *username, const char *channel, const char *room, cl
         return;
     }
     
-    char response[BUFFER_SIZE];
+    char response[10240];
     snprintf(response, sizeof(response), "Room %s dibuat", room);
     if (write(client->socket, response, strlen(response)) < 0) {
         perror("Unable to send responds to client");
@@ -681,7 +679,7 @@ void list_channels(client_info *client) {
     }
 
     char line[256];
-    char response[BUFFER_SIZE] = "";
+    char response[10240] = "";
 
     while (fgets(line, sizeof(line), channels_file)) {
         char *token = strtok(line, ",");
@@ -711,7 +709,7 @@ void list_rooms(const char *channel, client_info *client) {
     }
 
     struct dirent *entry;
-    char response[BUFFER_SIZE] = "";
+    char response[10240] = "";
 
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0 && strcmp(entry->d_name, "admin") != 0) {
@@ -748,7 +746,7 @@ void list_users(const char *channel, client_info *client) {
     }
 
     char line[256];
-    char response[BUFFER_SIZE] = "";
+    char response[10240] = "";
 
     while (fgets(line, sizeof(line), auth_file)) {
         char *token = strtok(line, ",");
@@ -776,7 +774,7 @@ void list_users_root(client_info *client) {
     }
 
     char line[256];
-    char response[BUFFER_SIZE] = "";
+    char response[10240] = "";
 
     while (fgets(line, sizeof(line), users_file)) {
         char *token = strtok(line, ",");
@@ -799,7 +797,7 @@ void join_channel(const char *username, const char *channel, client_info *client
     struct stat st;
     
     if (stat(channel_path, &st) == -1 || !S_ISDIR(st.st_mode)) {
-        char response[BUFFER_SIZE];
+        char response[10240];
         snprintf(response, sizeof(response), "Channel %s tidak ada", channel);
         if (write(client->socket, response, strlen(response)) < 0) {
             perror("Unable to send responds to client");
@@ -877,7 +875,7 @@ void join_channel(const char *username, const char *channel, client_info *client
             return;
         }
 
-        char response[BUFFER_SIZE];
+        char response[10240];
         snprintf(response, sizeof(response), "[%s/%s]", username, channel);
         if (write(client->socket, response, strlen(response)) < 0) {
             perror("Unable to send responds to client");
@@ -933,7 +931,7 @@ void join_channel(const char *username, const char *channel, client_info *client
 
     if (is_admin || is_user) {
         snprintf(client->logged_in_channel, sizeof(client->logged_in_channel), "%s", channel);
-        char response[BUFFER_SIZE];
+        char response[10240];
         snprintf(response, sizeof(response), "[%s/%s]", username, channel);
         if (write(client->socket, response, strlen(response)) < 0) {
             perror("Unable to send responds to client");
@@ -946,7 +944,7 @@ void join_channel(const char *username, const char *channel, client_info *client
             perror("Unable to send responds to client");
         }
 
-        char key[BUFFER_SIZE];
+        char key[10240];
         memset(key, 0, sizeof(key));
 
         if (recv(client->socket, key, sizeof(key), 0) < 0) {
@@ -1021,7 +1019,7 @@ void verify_key(const char *username, const char *channel, const char *key, clie
                 fclose(auth_file);
 
                 snprintf(client->logged_in_channel, sizeof(client->logged_in_channel), "%s", channel);
-                char response[BUFFER_SIZE];
+                char response[10240];
                 snprintf(response, sizeof(response), "[%s/%s]", username, channel);
                 if (write(client->socket, response, strlen(response)) < 0) {
                     perror("Unable to send responds to client");
@@ -1054,7 +1052,7 @@ void join_room(const char *channel, const char *room, client_info *client) {
     snprintf(room_path, sizeof(room_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/%s", channel, room);
     struct stat st;
     if (stat(room_path, &st) == -1 || !S_ISDIR(st.st_mode)) {
-        char response[BUFFER_SIZE];
+        char response[10240];
         snprintf(response, sizeof(response), "Room %s tidak ada di channel %s", room, channel);
         if (write(client->socket, response, strlen(response)) < 0) {
             perror("Unable to send responds to client");
@@ -1063,7 +1061,7 @@ void join_room(const char *channel, const char *room, client_info *client) {
     }
 
     snprintf(client->logged_in_room, sizeof(client->logged_in_room), "%s", room);
-    char response[BUFFER_SIZE];
+    char response[10240];
     snprintf(response, sizeof(response), "[%s/%s/%s]", client->logged_in_user, channel, room);
     if (write(client->socket, response, strlen(response)) < 0) {
         perror("Unable to send responds to client");
@@ -1397,14 +1395,14 @@ void log_activity(const char *channel, const char *message) {
 void handle_exit(client_info *client) {
     if (strlen(client->logged_in_room) > 0) {
         memset(client->logged_in_room, 0, sizeof(client->logged_in_room));
-        char response[BUFFER_SIZE];
+        char response[10240];
         snprintf(response, sizeof(response), "[%s/%s]", client->logged_in_user, client->logged_in_channel);
         if (write(client->socket, response, strlen(response)) < 0) {
             perror("Unable to send responds to client");
         }
     } else if (strlen(client->logged_in_channel) > 0) {
         memset(client->logged_in_channel, 0, sizeof(client->logged_in_channel));
-        char response[BUFFER_SIZE];
+        char response[10240];
         snprintf(response, sizeof(response), "[%s]", client->logged_in_user);
         if (write(client->socket, response, strlen(response)) < 0) {
             perror("Unable to send responds to client");
