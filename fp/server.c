@@ -536,6 +536,7 @@ void kick_user(const char *username, const char *channel, ClientInfo *client) {
         return;
     }
 
+    // Check if the user to be kicked is an admin or root
     char auth_path[256];
     snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
     FILE *auth_file = fopen(auth_path, "r");
@@ -544,43 +545,57 @@ void kick_user(const char *username, const char *channel, ClientInfo *client) {
         return;
     }
 
-    char temp_file[] = "/home/dim/uni/sisop/FP/DiscorIT/auth_temp.csv";
-    FILE *temp_auth_file = fopen(temp_file, "w");
-    if (!temp_auth_file) {
-        send_response(client, "Unable to open temporary auth.csv file");
-        fclose(auth_file);
-        return;
-    }
-
-    bool user_found = false;
-    char line_copy[256];
+    bool is_root = false;
     while (fgets(line, sizeof(line), auth_file)) {
-        strcpy(line_copy, line);
         char *token = strtok(line, ",");
         if (token == NULL) continue;
         token = strtok(NULL, ",");
         if (token == NULL) continue;
         if (strcmp(token, username) == 0) {
-            user_found = true;
-            continue;
+            token = strtok(NULL, ",");
+            if (strstr(token, "ROOT") != NULL) {
+                is_root = true;
+            }
+            break;
         }
-        fprintf(temp_auth_file, "%s", line_copy);
     }
 
     fclose(auth_file);
-    fclose(temp_auth_file);
 
-    if (!user_found) {
-        send_response(client, "User tidak ditemukan");
+    if (is_root) {
+        send_response(client, "Anda tidak dapat mengeluarkan ROOT");
         return;
     }
+
+    // Remove the user from the auth.csv file
+    char temp_path[256];
+    snprintf(temp_path, sizeof(temp_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth_temp.csv", channel);
+    FILE *temp_file = fopen(temp_path, "w+");
+    if (!temp_file) {
+        send_response(client, "Unable to create temp file");
+        return;
+    }
+
+    auth_file = fopen(auth_path, "r");
+    if (!auth_file) {
+        send_response(client, "Unable to open auth.csv file");
+        return;
+    }
+
+    while (fgets(line, sizeof(line), auth_file)) {
+        char *token = strtok(line, ",");
+        if (token == NULL) continue;
+        if (strcmp(token, username) == 0) continue;
+        fprintf(temp_file, "%s", line);
+    }
+
+    fclose(auth_file);
+    fclose(temp_file);
 
     if (remove(auth_path) != 0) {
         send_response(client, "Unable to remove auth.csv file");
         return;
     }
-
-    rename(temp_file, auth_path);
 
     char response[100];
     snprintf(response, sizeof(response), "%s berhasil dikeluarkan dari channel", username);
