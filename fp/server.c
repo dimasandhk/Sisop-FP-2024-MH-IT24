@@ -46,6 +46,7 @@ void verify_key(const char *username, const char *channel, const char *key, Clie
 void join_room(const char *channel, const char *room, ClientInfo *client);
 
 void update_channel(const char *channel, ClientInfo *client);
+void update_room(const char *channel, const char *room, const char *new_room, ClientInfo *client);
 
 void delete_directory(const char *path);
 void delete_channel(const char *channel, ClientInfo *client);
@@ -256,6 +257,20 @@ void handle_update(ClientInfo *cli) {
             update_channel(channel, cli);
         } else {
             const char *response = "Penggunaan perintah: EDIT CHANNEL <channel> TO <new_channel>";
+            write(cli->socket, response, strlen(response));
+        }
+    } else if (strcmp(type, "ROOM") == 0) {
+        char *room = strtok(NULL, " ");
+        char *to = strtok(NULL, " ");
+        char *new_room = strtok(NULL, " ");
+        
+        if (strlen(cli->logged_in_room) > 0 || strlen(cli->logged_in_channel) == 0) {
+            const char *response = "You must leave the room or join a channel first";
+            write(cli->socket, response, strlen(response));
+        } else if (room && to && new_room && strcmp(to, "TO") == 0) {
+            update_room(cli->logged_in_channel, room, new_room, cli);
+        } else {
+            const char *response = "Penggunaan perintah: EDIT ROOM <room> TO <new_room>";
             write(cli->socket, response, strlen(response));
         }
     } else {
@@ -947,6 +962,105 @@ void update_channel(const char *channel, ClientInfo *client) {
     // Success response
     const char *response = "Channel berhasil diubah";
     write(client->socket, response, strlen(response));
+
+    // Log the activity
+    char log_message[100];
+    snprintf(log_message, sizeof(log_message), "ROOT mengubah channel %s menjadi %s", channel, new_channel);
+    log_activity(channel, log_message);
+}
+
+void update_room(const char *channel, const char *room, const char *new_room, ClientInfo *client) {
+    FILE *users_file = fopen(USERS_FILE, "r");
+    if (!users_file) {
+        char response[] = "Unable to open users.csv file";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    char line[256];
+    bool is_admin = false;
+
+    while (fgets(line, sizeof(line), users_file)) {
+        char *token = strtok(line, ",");
+        token = strtok(NULL, ",");
+        if (token && strcmp(token, client->logged_in_user) == 0) {
+            token = strtok(NULL, ",");
+            token = strtok(NULL, ",");
+            if (strstr(token, "ROOT") != NULL) {
+                is_admin = true;
+            }
+            break;
+        }
+    }
+
+    fclose(users_file);
+
+    if (!is_admin) {
+        char auth_path[256];
+        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
+        FILE *auth_file = fopen(auth_path, "r");
+        if (!auth_file) {
+            char response[] = "Unable to open auth.csv file";
+            if (write(client->socket, response, strlen(response)) < 0) {
+                perror("Unable to send response to client");
+            }
+            return;
+        }
+
+        while (fgets(line, sizeof(line), auth_file)) {
+            char *token = strtok(line, ",");
+            if (token == NULL) continue;
+            token = strtok(NULL, ",");
+            if (token == NULL) continue;
+            if (strcmp(token, client->logged_in_user) == 0) {
+                token = strtok(NULL, ",");
+                if (strstr(token, "ADMIN") != NULL) {
+                    is_admin = true;
+                }
+                break;
+            }
+        }
+
+        fclose(auth_file);
+    }
+
+    if (!is_admin) {
+        char response[] = "Anda tidak memiliki izin untuk mengedit room ini";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    char room_path[256];
+    snprintf(room_path, sizeof(room_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/%s", channel, room);
+    struct stat st;
+    if (stat(room_path, &st) == -1 || !S_ISDIR(st.st_mode)) {
+        char response[] = "Room tidak ditemukan";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    char new_room_path[256];
+    snprintf(new_room_path, sizeof(new_room_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/%s", channel, new_room);
+
+    if (rename(room_path, new_room_path) != 0) {
+        char response[] = "Gagal mengubah nama room";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    char response[10240];
+    snprintf(response, sizeof(response), "Room %s berhasil diubah menjadi %s", room, new_room);
+    if (write(client->socket, response, strlen(response)) < 0) {
+        perror("Unable to send response to client");
+    }
 }
 
 // J (Join) handlers
