@@ -1393,19 +1393,13 @@ void delete_directory(const char *path) {
     rmdir(path);
 }
 
-void delete_channel(const char *channel, ClientInfo *client) {
+bool is_user_admin_or_root(const char *channel, ClientInfo *client) {
     FILE *users_file = fopen(USERS_FILE, "r");
     if (!users_file) {
-        char response[] = "Unable to open users.csv file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send response to client");
-        }
-        return;
+        return false;
     }
 
     char line[256];
-    bool is_admin = false;
-
     while (fgets(line, sizeof(line), users_file)) {
         char *token = strtok(line, ",");
         token = strtok(NULL, ",");
@@ -1413,48 +1407,43 @@ void delete_channel(const char *channel, ClientInfo *client) {
             token = strtok(NULL, ",");
             token = strtok(NULL, ",");
             if (strstr(token, "ROOT") != NULL) {
-                is_admin = true;
+                fclose(users_file);
+                return true;
             }
             break;
         }
     }
-
     fclose(users_file);
 
-    if (!is_admin) {
-        char auth_path[256];
-        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-        FILE *auth_file = fopen(auth_path, "r");
-        if (!auth_file) {
-            char response[] = "Unable to open auth.csv file";
-            if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send response to client");
-            }
-            return;
-        }
-
-        while (fgets(line, sizeof(line), auth_file)) {
-            char *token = strtok(line, ",");
-            if (token == NULL) continue;
-            token = strtok(NULL, ",");
-            if (token == NULL) continue;
-            if (strcmp(token, client->logged_in_user) == 0) {
-                token = strtok(NULL, ",");
-                if (strstr(token, "ADMIN") != NULL) {
-                    is_admin = true;
-                }
-                break;
-            }
-        }
-
-        fclose(auth_file);
+    char auth_path[256];
+    snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
+    FILE *auth_file = fopen(auth_path, "r");
+    if (!auth_file) {
+        return false;
     }
 
-    if (!is_admin) {
-        char response[] = "Anda tidak memiliki izin untuk menghapus channel ini";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send response to client");
+    while (fgets(line, sizeof(line), auth_file)) {
+        char *token = strtok(line, ",");
+        if (token == NULL) continue;
+        token = strtok(NULL, ",");
+        if (token == NULL) continue;
+        if (strcmp(token, client->logged_in_user) == 0) {
+            token = strtok(NULL, ",");
+            if (strstr(token, "ADMIN") != NULL) {
+                fclose(auth_file);
+                return true;
+            }
+            break;
         }
+    }
+    fclose(auth_file);
+    return false;
+}
+
+void delete_channel(const char *channel, ClientInfo *client) {
+    if (!is_user_admin_or_root(channel, client)) {
+        const char *response = "Anda tidak memiliki izin untuk menghapus channel ini";
+        write(client->socket, response, strlen(response));
         return;
     }
 
@@ -1462,10 +1451,8 @@ void delete_channel(const char *channel, ClientInfo *client) {
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
     struct stat st;
     if (stat(path, &st) == -1 || !S_ISDIR(st.st_mode)) {
-        char response[] = "Channel tidak ditemukan";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send response to client");
-        }
+        const char *response = "Channel tidak ditemukan";
+        write(client->socket, response, strlen(response));
         return;
     }
 
@@ -1475,10 +1462,8 @@ void delete_channel(const char *channel, ClientInfo *client) {
     // Update channels.csv
     FILE *channels_file = fopen(CHANNELS_FILE, "r");
     if (!channels_file) {
-        char response[] = "Unable to open channels.csv file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send response to client");
-        }
+        const char *response = "Unable to open channels.csv file";
+        write(client->socket, response, strlen(response));
         return;
     }
 
@@ -1486,14 +1471,13 @@ void delete_channel(const char *channel, ClientInfo *client) {
     snprintf(temp_path, sizeof(temp_path), "/home/dim/uni/sisop/FP/DiscorIT/channels_temp.csv");
     FILE *temp_file = fopen(temp_path, "w");
     if (!temp_file) {
-        char response[] = "Unable to create temp file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send response to client");
-        }
+        const char *response = "Unable to create temp file";
+        write(client->socket, response, strlen(response));
         fclose(channels_file);
         return;
     }
 
+    char line[256];
     while (fgets(line, sizeof(line), channels_file)) {
         char *token = strtok(line, ",");
         char *line_number = token;
@@ -1514,9 +1498,7 @@ void delete_channel(const char *channel, ClientInfo *client) {
 
     char response[100];
     snprintf(response, sizeof(response), "%s berhasil dihapus", channel);
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send response to client");
-    }
+    write(client->socket, response, strlen(response));
 }
 
 void delete_room(const char *channel, const char *room, ClientInfo *client) {
@@ -1671,6 +1653,13 @@ void delete_all_rooms(const char *channel, ClientInfo *client) {
 }
 
 // Other handlers
+// Helper function to get the current timestamp
+void get_current_timestamp(char *buffer, size_t buffer_size) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    strftime(buffer, buffer_size, "%d/%m/%Y %H:%M:%S", t);
+}
+
 void log_activity(const char *channel, const char *message) {
     char log_path[256];
     snprintf(log_path, sizeof(log_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/user.log", channel);
@@ -1681,36 +1670,37 @@ void log_activity(const char *channel, const char *message) {
         return;
     }
 
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
     char date[30];
-    strftime(date, sizeof(date), "%d/%m/%Y %H:%M:%S", t);
+    get_current_timestamp(date, sizeof(date));
 
     fprintf(log_file, "[%s] %s\n", date, message);
     fclose(log_file);
 }
 
+// Helper function to clear logged in information
+void clear_logged_in_info(ClientInfo *client) {
+    memset(client->logged_in_room, 0, sizeof(client->logged_in_room));
+    memset(client->logged_in_channel, 0, sizeof(client->logged_in_channel));
+}
+
 void handle_exit(ClientInfo *client) {
+    char response[10240];
     if (strlen(client->logged_in_room) > 0) {
-        memset(client->logged_in_room, 0, sizeof(client->logged_in_room));
-        char response[10240];
+        clear_logged_in_info(client);
         snprintf(response, sizeof(response), "[%s/%s]", client->logged_in_user, client->logged_in_channel);
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
     } else if (strlen(client->logged_in_channel) > 0) {
-        memset(client->logged_in_channel, 0, sizeof(client->logged_in_channel));
-        char response[10240];
+        clear_logged_in_info(client);
         snprintf(response, sizeof(response), "[%s]", client->logged_in_user);
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
     } else {
-        char response[] = "Anda telah keluar dari aplikasi";
+        snprintf(response, sizeof(response), "Anda telah keluar dari aplikasi");
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         close(client->socket);
         pthread_exit(NULL);
+    }
+
+    if (write(client->socket, response, strlen(response)) < 0) {
+        perror("Unable to send response to client");
     }
 }
