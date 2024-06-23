@@ -691,128 +691,149 @@ void create_room(const char *username, const char *channel, const char *room, Cl
 }
 
 // L (List) handlers
-void list_channels(ClientInfo *client) {
-    char path[256];
-    strcpy(path, CHANNELS_FILE);
-    FILE *channels_file = fopen(path, "r+");
-    if (channels_file == NULL) {
-        char response[] = "Unable to open channels.csv file or there are no channels";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+void send_response(ClientInfo *client, const char *response) {
+    if (write(client->socket, response, strlen(response)) < 0) {
+        perror("Unable to send response to client");
+    }
+}
+
+char *read_file_lines(const char *filepath) {
+    FILE *file = fopen(filepath, "r");
+    if (!file) return NULL;
+
+    char *content = malloc(10240);
+    if (!content) {
+        fclose(file);
+        return NULL;
+    }
+    content[0] = '\0';
+
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        strncat(content, line, 10240 - strlen(content) - 1);
+    }
+
+    fclose(file);
+    return content;
+}
+
+void list_directory(const char *path, const char *exclusions[], size_t num_exclusions, char *response, size_t response_size) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        snprintf(response, response_size, "Unable to open directory: %s", path);
         return;
     }
 
-    char line[256];
-    char response[10240] = "";
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        int exclude = 0;
+        for (size_t i = 0; i < num_exclusions; i++) {
+            if (strcmp(entry->d_name, exclusions[i]) == 0) {
+                exclude = 1;
+                break;
+            }
+        }
+        if (!exclude) {
+            strncat(response, entry->d_name, response_size - strlen(response) - 1);
+            strncat(response, " ", response_size - strlen(response) - 1);
+        }
+    }
 
+    closedir(dir);
+}
+
+void list_channels(ClientInfo *client) {
+    FILE *channels_file = fopen(CHANNELS_FILE, "r");
+    if (!channels_file) {
+        send_response(client, "Unable to open channels.csv file or there are no channels");
+        return;
+    }
+
+    char response[10240] = "";
+    char line[256];
     while (fgets(line, sizeof(line), channels_file)) {
         char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        token = strtok(NULL, ",");
-        if (token == NULL) continue;
-        snprintf(response + strlen(response), sizeof(response) - strlen(response), "%s ", token);
+        if (token) token = strtok(NULL, ","); // Get the channel name
+        if (token) {
+            strncat(response, token, sizeof(response) - strlen(response) - 1);
+            strncat(response, " ", sizeof(response) - strlen(response) - 1);
+        }
     }
 
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
+    if (strlen(response) == 0) {
+        snprintf(response, sizeof(response), "No channels found");
     }
 
+    send_response(client, response);
     fclose(channels_file);
 }
 
 void list_rooms(const char *channel, ClientInfo *client) {
     char path[256];
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
-    DIR *dir = opendir(path);
-    if (dir == NULL) {
-        char response[] = "Unable to open channel dir or there are no rooms";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
 
-    struct dirent *entry;
+    const char *exclusions[] = {".", "..", "admin"};
     char response[10240] = "";
-
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0 && strcmp(entry->d_name, "admin") != 0) {
-            char entry_path[512];
-            snprintf(entry_path, sizeof(entry_path), "%s/%s", path, entry->d_name);
-            struct stat entry_stat;
-            if (stat(entry_path, &entry_stat) == 0 && S_ISDIR(entry_stat.st_mode)) {
-                snprintf(response + strlen(response), sizeof(response) - strlen(response), "%s ", entry->d_name);
-            }
-        }
-    }
+    list_directory(path, exclusions, 3, response, sizeof(response));
 
     if (strlen(response) == 0) {
         snprintf(response, sizeof(response), "Tidak ada room yang ditemukan");
     }
 
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
-    }
-
-    closedir(dir);
+    send_response(client, response);
 }
 
 void list_users(const char *channel, ClientInfo *client) {
     char path[256];
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-    FILE *auth_file = fopen(path, "r+");
-    if (auth_file == NULL) {
-        char response[] = "Unable to open auth.csv file or you're not in a channel";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+    FILE *auth_file = fopen(path, "r");
+    if (!auth_file) {
+        send_response(client, "Unable to open auth.csv file or you're not in a channel");
         return;
     }
 
-    char line[256];
     char response[10240] = "";
-
+    char line[256];
     while (fgets(line, sizeof(line), auth_file)) {
         char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        token = strtok(NULL, ",");
-        if (token == NULL) continue;
-        snprintf(response + strlen(response), sizeof(response) - strlen(response), "%s ", token);
+        if (token) token = strtok(NULL, ","); // Get the username
+        if (token) {
+            strncat(response, token, sizeof(response) - strlen(response) - 1);
+            strncat(response, " ", sizeof(response) - strlen(response) - 1);
+        }
     }
 
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
+    if (strlen(response) == 0) {
+        snprintf(response, sizeof(response), "No users found");
     }
 
+    send_response(client, response);
     fclose(auth_file);
 }
 
 void list_users_root(ClientInfo *client) {
-    FILE *users_file = fopen(USERS_FILE, "r+");
-    if (users_file == NULL) {
-        char response[] = "Unable to open users.csv file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+    FILE *users_file = fopen(USERS_FILE, "r");
+    if (!users_file) {
+        send_response(client, "Unable to open users.csv file");
         return;
     }
 
-    char line[256];
     char response[10240] = "";
-
+    char line[256];
     while (fgets(line, sizeof(line), users_file)) {
         char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        token = strtok(NULL, ",");
-        if (token == NULL) continue;
-        snprintf(response + strlen(response), sizeof(response) - strlen(response), "%s ", token);
+        if (token) token = strtok(NULL, ","); // Get the username
+        if (token) {
+            strncat(response, token, sizeof(response) - strlen(response) - 1);
+            strncat(response, " ", sizeof(response) - strlen(response) - 1);
+        }
     }
 
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
+    if (strlen(response) == 0) {
+        snprintf(response, sizeof(response), "No users found");
     }
 
+    send_response(client, response);
     fclose(users_file);
 }
 
@@ -1502,43 +1523,9 @@ void delete_channel(const char *channel, ClientInfo *client) {
 }
 
 void delete_room(const char *channel, const char *room, ClientInfo *client) {
-        bool is_admin = false;
-        bool is_root = false;
-        char auth_path[256];
-        char line[256];
-        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-        FILE *auth_file = fopen(auth_path, "r");
-        if (!auth_file) {
-            char response[] = "Unable to open auth.csv file";
-            if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
-            }
-            return;
-        }
-
-        while (fgets(line, sizeof(line), auth_file)) {
-            char *token = strtok(line, ",");
-            if (token == NULL) continue;
-            token = strtok(NULL, ",");
-            if (token == NULL) continue;
-            if (strcmp(token, client->logged_in_user) == 0) {
-                token = strtok(NULL, ",");
-                if (strstr(token, "ADMIN") != NULL) {
-                    is_admin = true;
-                }else if (strstr(token, "ROOT") != NULL){
-                    is_root = true;
-                }
-                break;
-            }
-        }
-
-        fclose(auth_file);
-
-    if (!is_admin && !is_root) {
-        char response[] = "Anda tidak memiliki izin untuk menghapus room";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+    if (!is_user_admin_or_root(channel, client)) {
+        const char *response = "Anda tidak memiliki izin untuk menghapus room";
+        write(client->socket, response, strlen(response));
         return;
     }
 
@@ -1546,81 +1533,36 @@ void delete_room(const char *channel, const char *room, ClientInfo *client) {
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s/%s", channel, room);
     struct stat st;
     if (stat(path, &st) == -1 || !S_ISDIR(st.st_mode)) {
-        char response[] = "Room tidak ditemukan";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+        const char *response = "Room tidak ditemukan";
+        write(client->socket, response, strlen(response));
         return;
     }
 
-    // Delete directory
+    // Recursively delete the room directory
     delete_directory(path);
 
     char response[100];
     snprintf(response, sizeof(response), "%s berhasil dihapus", room);
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
-    }
+    write(client->socket, response, strlen(response));
 
     char log_message[100];
-    if(is_root){
-        snprintf(log_message, sizeof(log_message), "ROOT menghapus room %s", room);
-    } else {
-        snprintf(log_message, sizeof(log_message), "ADMIN menghapus room %s", room);
-    }
+    snprintf(log_message, sizeof(log_message), "User %s menghapus room %s", client->logged_in_user, room);
     log_activity(channel, log_message);
 }
 
 void delete_all_rooms(const char *channel, ClientInfo *client) {
-    char auth_path[256];
-    snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-    FILE *auth_file = fopen(auth_path, "r");
-    if (!auth_file) {
-        char response[] = "Unable to open auth.csv file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    char line[256];
-    bool is_admin = false;
-    bool is_root = false;
-
-    while (fgets(line, sizeof(line), auth_file)) {
-        char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        token = strtok(NULL, ",");
-        if (token == NULL) continue;
-        if (strcmp(token, client->logged_in_user) == 0) {
-            token = strtok(NULL, ",");
-            if (strstr(token, "ADMIN") != NULL) {
-                is_admin = true;
-            } else if (strstr(token, "ROOT") != NULL){
-                is_root = true;
-            }
-            break;
-        }
-    }
-
-    fclose(auth_file);
-
-    if (!is_admin && !is_root) {
-        char response[] = "Anda tidak memiliki izin untuk menghapus semua room";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+    if (!is_user_admin_or_root(channel, client)) {
+        const char *response = "Anda tidak memiliki izin untuk menghapus semua room";
+        write(client->socket, response, strlen(response));
         return;
     }
 
     char path[256];
     snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
     DIR *dir = opendir(path);
-    if (dir == NULL) {
-        char response[] = "Unable to open channel dir";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
+    if (!dir) {
+        const char *response = "Unable to open channel dir";
+        write(client->socket, response, strlen(response));
         return;
     }
 
@@ -1638,17 +1580,11 @@ void delete_all_rooms(const char *channel, ClientInfo *client) {
     }
     closedir(dir);
 
-    char response[] = "Semua room dihapus";
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
-    }
+    const char *response = "Semua room dihapus";
+    write(client->socket, response, strlen(response));
 
     char log_message[100];
-    if(is_root){
-        snprintf(log_message, sizeof(log_message), "ROOT menghapus semua room");
-    } else {
-        snprintf(log_message, sizeof(log_message), "ADMIN menghapus semua room");
-    }
+    snprintf(log_message, sizeof(log_message), "User %s menghapus semua room", client->logged_in_user);
     log_activity(channel, log_message);
 }
 
