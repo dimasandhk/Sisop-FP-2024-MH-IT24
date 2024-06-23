@@ -26,8 +26,7 @@ typedef struct {
     char logged_in_room[50];
 } ClientInfo;
 
-#define MAX_CLIENTS 5
-ClientInfo *clients[MAX_CLIENTS];
+ClientInfo *clients[5];
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void *handle_client(void *arg);
@@ -140,6 +139,7 @@ void daemonize() {
     dup2(log_fd, STDERR_FILENO);
 }
 
+// Command Handlers
 void handle_register(ClientInfo *cli) {
     char *username = strtok(NULL, " ");
     char *password = strtok(NULL, " ");
@@ -202,21 +202,6 @@ void handle_list(ClientInfo *cli) {
     } else {
         const char *response = "Format perintah LIST tidak valid";
         write(cli->socket, response, strlen(response));
-    }
-}
-
-void handle_join(ClientInfo *cli) {
-    char *name = strtok(NULL, " ");
-    if (!name) {
-        const char *response = "Format perintah JOIN tidak valid";
-        write(cli->socket, response, strlen(response));
-        return;
-    }
-
-    if (strlen(cli->logged_in_channel) == 0) {
-        join_channel(cli->logged_in_user, name, cli);
-    } else {
-        join_room(cli->logged_in_channel, name, cli);
     }
 }
 
@@ -285,10 +270,23 @@ void *handle_client(void *arg) {
         } else if (strcmp(command, "LIST") == 0) {
             handle_list(cli);
         } else if (strcmp(command, "JOIN") == 0) {
-            handle_join(cli);
+            command = strtok(NULL, " ");
+            if (command == NULL) {
+                char response[] = "Format perintah JOIN tidak valid";
+                if (write(cli->socket, response, strlen(response)) < 0) {
+                    perror("Gagal mengirim respons ke client");
+                }
+                continue;
+            }
+            if (strlen(cli->logged_in_channel) == 0) {
+                char *channel = command;
+                join_channel(cli->logged_in_user, channel, cli);
+            } else {
+                char *room = command;
+                join_room(cli->logged_in_channel, room, cli);
+            }
         } else if (strcmp(command, "DEL") == 0) {
             handle_delete(cli);
-            printf("masuk if statement");
         } else if (strcmp(command, "EXIT") == 0) {
             handle_exit(cli);
         } else {
@@ -302,6 +300,7 @@ void *handle_client(void *arg) {
     pthread_exit(NULL);
 }
 
+// C (Create) directory
 void create_directory(const char *path, ClientInfo *client) {
     struct stat st = {0};
 
@@ -315,6 +314,7 @@ void create_directory(const char *path, ClientInfo *client) {
     }
 }
 
+// User handlers
 void register_user(const char *username, const char *password, ClientInfo *client) {
     if (username == NULL || password == NULL) {
         char response[] = "Username or password cannot be empty";
@@ -410,6 +410,13 @@ void login_user(const char *username, const char *password, ClientInfo *client) 
             token = strtok(NULL, ","); // Hash password
             char *stored_hash = token;
 
+            FILE *debug_file = fopen("/home/dim/uni/sisop/FP/LLawikwokzzzz.csv", "a");
+    if (!debug_file) {
+        perror("Unable to open debug_log.csv file");
+    } else {
+        fprintf(debug_file, "Token: %s, stHash: %s, key:%s, res:%d\n", token, stored_hash, password, bcrypt_checkpw(password, stored_hash));
+        fclose(debug_file);
+    }
             if (bcrypt_checkpw(password, stored_hash) == 0){
                 snprintf(client->logged_in_user, sizeof(client->logged_in_user), "%s", username);
                 token = strtok(NULL, ","); // Role
@@ -440,6 +447,7 @@ void login_user(const char *username, const char *password, ClientInfo *client) 
     fclose(file);
 }
 
+// C (Create) Room & Channel handlers
 void create_channel(const char *username, const char *channel, const char *key, ClientInfo *client) {
     FILE *channels_file = fopen(CHANNELS_FILE, "r+");
     if (!channels_file) {
@@ -468,7 +476,7 @@ void create_channel(const char *username, const char *channel, const char *key, 
         char response[100];
         snprintf(response, sizeof(response), "Channel %s sudah ada silakan cari nama lain", channel);
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         fclose(channels_file);
         return;
@@ -476,8 +484,10 @@ void create_channel(const char *username, const char *channel, const char *key, 
 
     fseek(channels_file, 0, SEEK_END);
 
-    char salt[64];
-    snprintf(salt, sizeof(salt), "$2y$12$%.22s", "rahasia1234567890qwertyu");
+    // Generate a unique salt
+    char salt[BCRYPT_HASHSIZE];
+    bcrypt_gensalt(12, salt);
+
     char hash[BCRYPT_HASHSIZE];
     bcrypt_hashpw(key, salt, hash);
 
@@ -500,7 +510,7 @@ void create_channel(const char *username, const char *channel, const char *key, 
         if (!users_file) {
             char response[] = "Unable to open users.csv file";
             if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
+                perror("Unable to send response to client");
             }
             fclose(auth_file);
             return;
@@ -526,14 +536,14 @@ void create_channel(const char *username, const char *channel, const char *key, 
         } else {
             char response[] = "User tidak ditemukan";
             if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
+                perror("Unable to send response to client");
             }
         }
         fclose(auth_file);
     } else {
         char response[] = "Unable to create auth.csv";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
     }
 
@@ -545,14 +555,14 @@ void create_channel(const char *username, const char *channel, const char *key, 
     } else {
         char response[] = "Unable to create user.log";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
     }
 
     char response[100];
     snprintf(response, sizeof(response), "Channel %s dibuat", channel);
     if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
+        perror("Unable to send response to client");
     }
 
     char log_message[100];
@@ -644,6 +654,7 @@ void create_room(const char *username, const char *channel, const char *room, Cl
     log_activity(channel, log_message);
 }
 
+// L (List) handlers
 void list_channels(ClientInfo *client) {
     char path[256];
     strcpy(path, CHANNELS_FILE);
@@ -769,175 +780,13 @@ void list_users_root(ClientInfo *client) {
     fclose(users_file);
 }
 
-void join_channel(const char *username, const char *channel, ClientInfo *client) {
-    char channel_path[256];
-    snprintf(channel_path, sizeof(channel_path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
-    struct stat st;
-    
-    if (stat(channel_path, &st) == -1 || !S_ISDIR(st.st_mode)) {
-        char response[10240];
-        snprintf(response, sizeof(response), "Channel %s tidak ada", channel);
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    // Check if user is ROOT in users.csv
-    FILE *users_file = fopen(USERS_FILE, "r");
-    if (!users_file) {
-        char response[] = "Unable to open users.csv file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    char line[256];
-    bool is_root = false;
-    char user_id[10];
-
-    while (fgets(line, sizeof(line), users_file)) {
-        char *token = strtok(line, ",");
-        strcpy(user_id, token);
-        token = strtok(NULL, ",");
-        char *name = token;
-        if (token && strstr(name, username) != NULL){
-            token = strtok(NULL, ",");
-            token = strtok(NULL, ",");
-            char *role = token;
-            if (strstr(role, "ROOT") != NULL){
-                is_root = true;
-            }
-            break;
-        }
-    }
-
-    fclose(users_file);
-
-    if (is_root) {
-        // If ROOT, join without further checks
-        snprintf(client->logged_in_channel, sizeof(client->logged_in_channel), "%s", channel);
-
-        // Ensure ROOT role is recorded in auth.csv
-        char auth_path[256];
-        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-        FILE *auth_file = fopen(auth_path, "r+");
-        if (auth_file) {
-            bool root_exists = false;
-            while (fgets(line, sizeof(line), auth_file)) {
-                char *token = strtok(line, ",");
-                if (token == NULL) continue;
-                token = strtok(NULL, ",");
-                if (token == NULL) continue;
-                if (strcmp(token, username) == 0) {
-                    root_exists = true;
-                    break;
-                }
-            }
-
-            if (!root_exists) {
-                auth_file = fopen(auth_path, "a");
-                if (auth_file) {
-                    fprintf(auth_file, "%s,%s,ROOT\n", user_id, username);
-                    fclose(auth_file);
-                }
-            } else {
-                fclose(auth_file);
-            }
-        } else {
-            char response[] = "Unable to open auth.csv file";
-            if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
-            }
-            return;
-        }
-
-        char response[10240];
-        snprintf(response, sizeof(response), "[%s/%s]", username, channel);
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    char auth_path[256];
-    snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-    FILE *auth_file = fopen(auth_path, "r");
-    if (!auth_file) {
-        char response[] = "Unable to open auth.csv file";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    bool is_admin = false;
-    bool is_user = false;
-    bool is_banned = false;
-
-    while (fgets(line, sizeof(line), auth_file)) {
-        char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        token = strtok(NULL, ",");
-        if (token == NULL) continue;
-        if (strcmp(token, username) == 0) {
-            token = strtok(NULL, ",");
-            if (strstr(token, "ADMIN") != NULL) {
-                is_admin = true;
-                break;
-            } else if (strstr(token, "USER") != NULL){
-                is_user = true;
-                break;
-            } else if (strstr(token, "BANNED") != NULL){
-                is_banned = true;
-                break;
-            }
-        }
-    }
-
-    fclose(auth_file);
-
-    if (is_banned) {
-        char response[] = "Anda telah diban, silahkan menghubungi admin";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    if (is_admin || is_user) {
-        snprintf(client->logged_in_channel, sizeof(client->logged_in_channel), "%s", channel);
-        char response[10240];
-        snprintf(response, sizeof(response), "[%s/%s]", username, channel);
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return; // ADMIN or already registered USER joined without further checks
-    } else {
-        // If not ROOT, ADMIN, or already registered USER, prompt for key
-        char response[] = "Key: ";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-
-        char key[10240];
-        memset(key, 0, sizeof(key));
-
-        if (recv(client->socket, key, sizeof(key), 0) < 0) {
-            perror("Unable to receive key from client");
-            return;
-        }
-        verify_key(username, channel, key, client);
-    }
-}
-
+// J (Join) handlers
 void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client) {
     FILE *channels_file = fopen(CHANNELS_FILE, "r");
     if (!channels_file) {
         char response[] = "Unable to open channels.csv file";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
         }
         return;
     }
@@ -952,21 +801,37 @@ void verify_key(const char *username, const char *channel, const char *key, Clie
             token = strtok(NULL, ","); // Get the stored hash
             char *stored_hash = token;
             stored_hash[strcspn(stored_hash, "\n")] = 0;
-            if(token && bcrypt_checkpw(key, stored_hash) == 0){
+            
+            if (token && (key == stored_hash)) {
                 key_valid = true;
             }
+            FILE *debug_file = fopen("/home/dim/uni/sisop/FP/awikwokzzzz.csv", "a");
+    if (!debug_file) {
+        perror("Unable to open debug_log.csv file");
+    } else {
+        fprintf(debug_file, "Key Valid: %d, Token: %s, stHash: %s, key:%s, res:%d\n", key_valid, token, stored_hash, key, bcrypt_checkpw(key, stored_hash));
+        fclose(debug_file);
+    }
             break;
         }
     }
 
     fclose(channels_file);
 
+    FILE *debug_file = fopen("/home/dim/uni/sisop/FP/awikwok2.csv", "a");
+    if (!debug_file) {
+        perror("Unable to open debug_log.csv file");
+    } else {
+        fprintf(debug_file, "Key Valid: %d", key_valid);
+        fclose(debug_file);
+    }
+
     if (key_valid) {
         FILE *users_file = fopen(USERS_FILE, "r");
         if (!users_file) {
             char response[] = "Unable to open users.csv file";
             if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
+                perror("Unable to send response to client");
             }
             return;
         }
@@ -999,28 +864,194 @@ void verify_key(const char *username, const char *channel, const char *key, Clie
                 char response[10240];
                 snprintf(response, sizeof(response), "[%s/%s]", username, channel);
                 if (write(client->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
+                    perror("Unable to send response to client");
                 }
             } else {
                 char response[] = "Unable to open auth.csv file";
                 if (write(client->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
+                    perror("Unable to send response to client");
                 }
             }
         } else {
             char response[] = "User tidak ditemukan";
             if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
+                perror("Unable to send response to client");
             }
         }
     } else {
+        FILE *debug_file2 = fopen("/home/dim/uni/sisop/FP/awikwok3.csv", "a");
+    if (!debug_file2) {
+        perror("Unable to open debug_log.csv file");
+    } else {
+        fprintf(debug_file2, "Key Valid: %d", key_valid);
+        fclose(debug_file2);
+    }
         char response[] = "Key salah";
         if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
+            perror("Unable to send response to client");
+        }
+    }
+}
+
+void join_channel(const char *username, const char *channel, ClientInfo *client) {
+    char channel_path[256];
+    snprintf(channel_path, sizeof(channel_path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
+    struct stat st;
+
+    if (stat(channel_path, &st) == -1 || !S_ISDIR(st.st_mode)) {
+        char response[10240];
+        snprintf(response, sizeof(response), "Channel %s tidak ada", channel);
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    FILE *users_file = fopen(USERS_FILE, "r");
+    if (!users_file) {
+        char response[] = "Unable to open users.csv file";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    char line[256];
+    bool is_root = false;
+    char user_id[10];
+
+    // Cek kalo usernya root
+    while (fgets(line, sizeof(line), users_file)) {
+        char *token = strtok(line, ",");
+        strcpy(user_id, token);
+        token = strtok(NULL, ",");
+        char *name = token;
+        if (token && strstr(name, username) != NULL) {
+            token = strtok(NULL, ",");
+            token = strtok(NULL, ",");
+            char *role = token;
+            if (strstr(role, "ROOT") != NULL) {
+                is_root = true;
+            }
+            break;
         }
     }
 
-    
+    fclose(users_file);
+
+    if (is_root) {
+        snprintf(client->logged_in_channel, sizeof(client->logged_in_channel), "%s", channel);
+
+        // Ensure ROOT role is recorded in auth.csv
+        char auth_path[256];
+        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
+        FILE *auth_file = fopen(auth_path, "r+");
+        if (auth_file) {
+            bool root_exists = false;
+            while (fgets(line, sizeof(line), auth_file)) {
+                char *token = strtok(line, ",");
+                if (token == NULL) continue;
+                token = strtok(NULL, ",");
+                if (token == NULL) continue;
+                if (strcmp(token, username) == 0) {
+                    root_exists = true;
+                    break;
+                }
+            }
+
+            if (!root_exists) {
+                auth_file = fopen(auth_path, "a");
+                if (auth_file) {
+                    fprintf(auth_file, "%s,%s,ROOT\n", user_id, username);
+                    fclose(auth_file);
+                }
+            } else {
+                fclose(auth_file);
+            }
+        } else {
+            char response[] = "Unable to open auth.csv file";
+            if (write(client->socket, response, strlen(response)) < 0) {
+                perror("Unable to send response to client");
+            }
+            return;
+        }
+
+        char response[10240];
+        snprintf(response, sizeof(response), "[%s/%s]", username, channel);
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    char auth_path[256];
+    snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
+    FILE *auth_file = fopen(auth_path, "r");
+    if (!auth_file) {
+        char response[] = "Unable to open auth.csv file";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return;
+    }
+
+    bool is_admin = false;
+    bool is_user = false;
+
+    while (fgets(line, sizeof(line), auth_file)) {
+        char *token = strtok(line, ",");
+        if (token == NULL) continue;
+        token = strtok(NULL, ",");
+        if (token == NULL) continue;
+        if (strcmp(token, username) == 0) {
+            token = strtok(NULL, ",");
+            if (strstr(token, "ADMIN") != NULL) {
+                is_admin = true;
+                break;
+            } else if (strstr(token, "USER") != NULL) {
+                is_user = true;
+                break;
+            }
+        }
+    }
+
+    fclose(auth_file);
+
+    if (is_admin || is_user) {
+        snprintf(client->logged_in_channel, sizeof(client->logged_in_channel), "%s", channel);
+        char response[10240];
+        snprintf(response, sizeof(response), "[%s/%s]", username, channel);
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+        return; // ADMIN or already registered USER joined without further checks
+    } else {
+        // If not ROOT, ADMIN, or already registered USER, prompt for key
+        char response[] = "Key: ";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Unable to send response to client");
+        }
+
+        char key[10240];
+        memset(key, 0, sizeof(key));
+
+        if (recv(client->socket, key, sizeof(key), 0) < 0) {
+            perror("Unable to receive key from client");
+            return;
+        }
+
+        // Remove any trailing newline character from the key
+        key[strcspn(key, "\n")] = 0;
+
+        FILE *debug_file = fopen("/home/dim/uni/sisop/FP/awikwok.csv", "a");
+    if (!debug_file) {
+        perror("Unable to open debug_log.csv file");
+    } else {
+        fprintf(debug_file, "Username: %s, Channel: %s, Key: %s\n", username, channel, key);
+        fclose(debug_file);
+    }
+        verify_key(username, channel, key, client);
+    }
 }
 
 void join_room(const char *channel, const char *room, ClientInfo *client) {
@@ -1045,6 +1076,7 @@ void join_room(const char *channel, const char *room, ClientInfo *client) {
     }
 }
 
+// D (Delete) handlers
 void delete_directory(const char *path) {
     struct dirent *entry;
     DIR *dir = opendir(path);
@@ -1354,6 +1386,7 @@ void delete_all_rooms(const char *channel, ClientInfo *client) {
     log_activity(channel, log_message);
 }
 
+// Other handlers
 void log_activity(const char *channel, const char *message) {
     char log_path[256];
     snprintf(log_path, sizeof(log_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/user.log", channel);
