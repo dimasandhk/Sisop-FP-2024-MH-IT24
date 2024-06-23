@@ -350,145 +350,119 @@ void create_directory(const char *path, ClientInfo *client) {
 }
 
 // User handlers
-void register_user(const char *username, const char *password, ClientInfo *client) {
-    if (username == NULL || password == NULL) {
-        char response[] = "Username or password cannot be empty";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-    create_directory("/home/dim/uni/sisop/FP/DiscorIT", client);
-
-    FILE *file = fopen(USERS_FILE, "r+");
-    if (!file) {
-        file = fopen(USERS_FILE, "w+");
-        if (!file) {
-            perror("Tidak dapat membuka atau membuat file");
-            char response[] = "Tidak dapat membuka atau membuat file users.csv";
-            if (write(client->socket, response, strlen(response)) < 0) {
-                perror("Unable to send responds to client");
-            }
-            return;
-        }
-    }
+bool user_exists(const char *username) {
+    FILE *file = fopen(USERS_FILE, "r");
+    if (!file) return false;
 
     char line[256];
-    bool user_exists = false;
-    int user_count = 0;
-
     while (fgets(line, sizeof(line), file)) {
         char *token = strtok(line, ",");
-        if (token == NULL) continue;
         token = strtok(NULL, ",");
         if (token && strcmp(token, username) == 0) {
-            user_exists = true;
-            break;
+            fclose(file);
+            return true;
         }
-        user_count++;
     }
+    fclose(file);
+    return false;
+}
 
-    if (user_exists) {
-        char response[100];
-        snprintf(response, sizeof(response), "%s sudah terdaftar", username);
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        fclose(file);
-        return;
+int get_user_count() {
+    FILE *file = fopen(USERS_FILE, "r");
+    if (!file) return 0;
+
+    int count = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        count++;
     }
+    fclose(file);
+    return count;
+}
 
-    fseek(file, 0, SEEK_END);
+bool write_user_to_file(const char *username, const char *password, int user_count) {
+    FILE *file = fopen(USERS_FILE, "a");
+    if (!file) return false;
 
-    char salt[64];
-    snprintf(salt, sizeof(salt), "$2y$12$%.22s", "rahasia1234567890qwertyu");
+    char salt[BCRYPT_HASHSIZE];
+    bcrypt_gensalt(12, salt);
+
     char hash[BCRYPT_HASHSIZE];
     bcrypt_hashpw(password, salt, hash);
 
-    if (hash == NULL) {
-        char response[] = "Unable to create hash password";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        fclose(file);
-        return;
-    }
-
     fprintf(file, "%d,%s,%s,%s\n", user_count + 1, username, hash, user_count == 0 ? "ROOT" : "USER");
     fclose(file);
-
-    char response[100];
-    snprintf(response, sizeof(response), "%s berhasil register", username);
-    if (write(client->socket, response, strlen(response)) < 0) {
-        perror("Unable to send responds to client");
-    }
+    return true;
 }
 
-void login_user(const char *username, const char *password, ClientInfo *client) {
-    FILE *file = fopen(USERS_FILE, "r");
-    if (!file) {
-        char response[] = "Tidak dapat membuka file users.csv atau user belum terdaftar";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-        return;
-    }
-
-    char line[256];
-    bool user_found = false;
-
-    while (fgets(line, sizeof(line), file)) {
-        char *token = strtok(line, ",");
-        token = strtok(NULL, ",");
-        if (token && strcmp(token, username) == 0) {
-            user_found = true;
-            token = strtok(NULL, ","); // Hash password
-            char *stored_hash = token;
-
-            FILE *debug_file = fopen("/home/dim/uni/sisop/FP/LLawikwokzzzz.csv", "a");
-    if (!debug_file) {
-        perror("Unable to open debug_log.csv file");
-    } else {
-        fprintf(debug_file, "Token: %s, stHash: %s, key:%s, res:%d\n", token, stored_hash, password, bcrypt_checkpw(password, stored_hash));
-        fclose(debug_file);
-    }
-            if (bcrypt_checkpw(password, stored_hash) == 0){
-                snprintf(client->logged_in_user, sizeof(client->logged_in_user), "%s", username);
-                token = strtok(NULL, ","); // Role
-                snprintf(client->logged_in_role, sizeof(client->logged_in_role), "%s", token);
-
-                char response[10240];
-                snprintf(response, sizeof(response), "%s berhasil login", username);
-                if (write(client->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-            } else {
-                char response[] = "Password salah";
-                if (write(client->socket, response, strlen(response)) < 0) {
-                    perror("Unable to send responds to client");
-                }
-            }
-            break;
-        }
-    }
-
-    if (!user_found) {
-        char response[] = "Username tidak ditemukan";
-        if (write(client->socket, response, strlen(response)) < 0) {
-            perror("Unable to send responds to client");
-        }
-    }
-
-    fclose(file);
-}
-
-// C (Create) Room & Channel handlers
-void send_response(ClientInfo *client, const char *response) {
-    if (write(client->socket, response, strlen(response)) < 0) {
+void send_response(ClientInfo *client, const char *message) {
+    if (write(client->socket, message, strlen(message)) < 0) {
         perror("Unable to send response to client");
     }
 }
 
+void register_user(const char *username, const char *password, ClientInfo *client) {
+    if (username == NULL || password == NULL) {
+        send_response(client, "Username or password cannot be empty");
+        return;
+    }
+
+    create_directory("/home/dim/uni/sisop/FP/DiscorIT", client);
+
+    if (user_exists(username)) {
+        char response[100];
+        snprintf(response, sizeof(response), "%s sudah terdaftar", username);
+        send_response(client, response);
+        return;
+    }
+
+    int user_count = get_user_count();
+
+    if (!write_user_to_file(username, password, user_count)) {
+        send_response(client, "Tidak dapat membuka atau membuat file users.csv");
+        return;
+    }
+
+    char response[100];
+    snprintf(response, sizeof(response), "%s berhasil register", username);
+    send_response(client, response);
+}
+
+bool verify_user_credentials(const char *username, const char *password, ClientInfo *client) {
+    FILE *file = fopen(USERS_FILE, "r");
+    if (!file) return false;
+
+    char line[256];
+    while (fgets(line, sizeof(line), file)) {
+        char *token = strtok(line, ",");
+        token = strtok(NULL, ",");
+        if (token && strcmp(token, username) == 0) {
+            char *stored_hash = strtok(NULL, ",");
+            if (bcrypt_checkpw(password, stored_hash) == 0) {
+                snprintf(client->logged_in_user, sizeof(client->logged_in_user), "%s", username);
+                char *role = strtok(NULL, ",");
+                snprintf(client->logged_in_role, sizeof(client->logged_in_role), "%s", role);
+                fclose(file);
+                return true;
+            }
+            break;
+        }
+    }
+    fclose(file);
+    return false;
+}
+
+void login_user(const char *username, const char *password, ClientInfo *client) {
+    if (verify_user_credentials(username, password, client)) {
+        char response[10240];
+        snprintf(response, sizeof(response), "%s berhasil login", username);
+        send_response(client, response);
+    } else {
+        send_response(client, "Username atau password salah");
+    }
+}
+
+// C (Create) Room & Channel handlers
 bool channel_exists(const char *channel) {
     FILE *channels_file = fopen(CHANNELS_FILE, "r");
     if (!channels_file) return false;
