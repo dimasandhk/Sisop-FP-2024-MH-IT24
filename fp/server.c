@@ -780,6 +780,9 @@ void list_users_root(ClientInfo *client) {
     fclose(users_file);
 }
 
+// U (Update) handlers
+// void update_channel(const char *channel, const char )
+
 // J (Join) handlers
 void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client) {
     FILE *channels_file = fopen(CHANNELS_FILE, "r");
@@ -802,14 +805,15 @@ void verify_key(const char *username, const char *channel, const char *key, Clie
             char *stored_hash = token;
             stored_hash[strcspn(stored_hash, "\n")] = 0;
             
-            if (token && (key == stored_hash)) {
+            if (token && strcmp(token, stored_hash) == 0){
                 key_valid = true;
             }
+            
             FILE *debug_file = fopen("/home/dim/uni/sisop/FP/awikwokzzzz.csv", "a");
     if (!debug_file) {
         perror("Unable to open debug_log.csv file");
     } else {
-        fprintf(debug_file, "Key Valid: %d, Token: %s, stHash: %s, key:%s, res:%d\n", key_valid, token, stored_hash, key, bcrypt_checkpw(key, stored_hash));
+        fprintf(debug_file, "Key Valid: %d, eq: %d,Token: %s, stHash: %s, key:%s, res:%d\n", key_valid, strcmp(token, stored_hash), token, stored_hash, key, bcrypt_checkpw(key, stored_hash));
         fclose(debug_file);
     }
             break;
