@@ -45,6 +45,8 @@ void join_channel(const char *username, const char *channel, ClientInfo *client)
 void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client);
 void join_room(const char *channel, const char *room, ClientInfo *client);
 
+void update_channel(const char *channel, ClientInfo *client);
+
 void delete_directory(const char *path);
 void delete_channel(const char *channel, ClientInfo *client);
 void delete_room(const char *channel, const char *room, ClientInfo *client);
@@ -245,6 +247,23 @@ void handle_delete(ClientInfo *cli) {
     }
 }
 
+// handle update for channel (EDIT CHANNEL <channel> TO <new_channel>)
+void handle_update(ClientInfo *cli) {
+    char *type = strtok(NULL, " ");
+    if (strcmp(type, "CHANNEL") == 0) {
+        char *channel = strtok(NULL, " ");
+        if (channel) {
+            update_channel(channel, cli);
+        } else {
+            const char *response = "Penggunaan perintah: EDIT CHANNEL <channel> TO <new_channel>";
+            write(cli->socket, response, strlen(response));
+        }
+    } else {
+        const char *response = "Format perintah EDIT tidak valid";
+        write(cli->socket, response, strlen(response));
+    }
+}
+
 void *handle_client(void *arg) {
     ClientInfo *cli = (ClientInfo *)arg;
     char buffer[10240];
@@ -287,7 +306,9 @@ void *handle_client(void *arg) {
             }
         } else if (strcmp(command, "DEL") == 0) {
             handle_delete(cli);
-        } else if (strcmp(command, "EXIT") == 0) {
+        } else if (strcmp(command, "EDIT") == 0) {
+            handle_update(cli);
+        }  else if (strcmp(command, "EXIT") == 0) {
             handle_exit(cli);
         } else {
             const char *response = "Perintah tidak dikenali";
@@ -782,6 +803,151 @@ void list_users_root(ClientInfo *client) {
 
 // U (Update) handlers
 // void update_channel(const char *channel, const char )
+void update_channel(const char *channel, ClientInfo *client) {
+    char *new_channel = strtok(NULL, " "); // Get the "TO"
+    if (!new_channel || strcmp(new_channel, "TO") != 0) {
+        const char *response = "Penggunaan perintah: EDIT CHANNEL <channel> TO <new_channel>";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    new_channel = strtok(NULL, " "); // Get the new channel name
+    if (!new_channel) {
+        const char *response = "Penggunaan perintah: EDIT CHANNEL <channel> TO <new_channel>";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    FILE *users_file = fopen(USERS_FILE, "r");
+    if (!users_file) {
+        const char *response = "Unable to open users.csv file";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    char line[256];
+    bool is_admin = false;
+
+    while (fgets(line, sizeof(line), users_file)) {
+        char *token = strtok(line, ",");
+        token = strtok(NULL, ",");
+        if (token && strcmp(token, client->logged_in_user) == 0) {
+            token = strtok(NULL, ",");
+            token = strtok(NULL, ",");
+            if (strstr(token, "ROOT") != NULL) {
+                is_admin = true;
+            }
+            break;
+        }
+    }
+
+    fclose(users_file);
+
+    if (!is_admin) {
+        char auth_path[256];
+        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
+        FILE *auth_file = fopen(auth_path, "r");
+        if (!auth_file) {
+            const char *response = "Unable to open auth.csv file";
+            write(client->socket, response, strlen(response));
+            return;
+        }
+
+        while (fgets(line, sizeof(line), auth_file)) {
+            char *token = strtok(line, ",");
+            if (token == NULL) continue;
+            token = strtok(NULL, ",");
+            if (token == NULL) continue;
+            if (strcmp(token, client->logged_in_user) == 0) {
+                token = strtok(NULL, ",");
+                if (strstr(token, "ADMIN") != NULL) {
+                    is_admin = true;
+                }
+                break;
+            }
+        }
+
+        fclose(auth_file);
+    }
+
+    if (!is_admin) {
+        const char *response = "Anda tidak memiliki izin untuk mengubah channel ini";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "/home/dim/uni/sisop/FP/DiscorIT/%s", channel);
+    struct stat st;
+    if (stat(path, &st) == -1 || !S_ISDIR(st.st_mode)) {
+        const char *response = "Channel tidak ditemukan";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    // Renaming the directory
+    char new_path[256];
+    snprintf(new_path, sizeof(new_path), "/home/dim/uni/sisop/FP/DiscorIT/%s", new_channel);
+    if (rename(path, new_path) == -1) {
+        perror("Unable to rename directory");
+        const char *response = "Gagal mengganti nama channel";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    // Updating the channels.csv file
+    FILE *channels_file = fopen(CHANNELS_FILE, "r");
+    if (!channels_file) {
+        const char *response = "Unable to open channels.csv file";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    char temp_file[] = "/home/dim/uni/sisop/FP/DiscorIT/channels_temp.csv";
+    FILE *temp_channels_file = fopen(temp_file, "w");
+    if (!temp_channels_file) {
+        const char *response = "Unable to open temporary channels.csv file";
+        write(client->socket, response, strlen(response));
+        fclose(channels_file);
+        return;
+    }
+
+    bool channel_found = false;
+
+    while (fgets(line, sizeof(line), channels_file)) {
+        char *token = strtok(line, ",");
+        char *channel_name = strtok(NULL, ",");
+        char *stored_hash = strtok(NULL, ",");
+        if (channel_name && strcmp(channel_name, channel) == 0) {
+            fprintf(temp_channels_file, "%s,%s,%s\n", token, new_channel, stored_hash);
+            channel_found = true;
+        } else {
+            fputs(line, temp_channels_file);
+        }
+    }
+
+    fclose(channels_file);
+    fclose(temp_channels_file);
+
+    if (!channel_found) {
+        const char *response = "Channel tidak ditemukan di channels.csv";
+        write(client->socket, response, strlen(response));
+        remove(temp_file); // Remove the temporary file as it is not needed
+        return;
+    }
+
+    // Replace the original channels.csv with the updated one
+    if (rename(temp_file, CHANNELS_FILE) == -1) {
+        perror("Unable to replace channels.csv");
+        const char *response = "Gagal memperbarui channels.csv";
+        write(client->socket, response, strlen(response));
+        return;
+    }
+
+    // Success response
+    const char *response = "Channel berhasil diubah";
+    write(client->socket, response, strlen(response));
+}
 
 // J (Join) handlers
 void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client) {
