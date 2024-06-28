@@ -20,4 +20,21 @@ Fitur yang dibuat sebelum revisi yakni:
 - DELETE CHANNEL & ROOM
 ![](./img/del-ch-room.png)
 
+- EDIT CHANNEL & ROOM
+![](./img/edit-ch-room.png)
 
+- EXIT COMMAND
+![](./img/EXIT.png)
+
+# Command Handling tambahan setelah revisi
+- EDIT PROFILE SELF
+![](./img/edit-profile-self.png)
+
+- EDIT PROFILE FROM ROOT
+![](./img/edit-where-root.png)
+
+- REMOVE USER FROM ROOT
+![](./img/remove-root.png)
+
+- KICK USER
+![](./img/kick-user.png)
