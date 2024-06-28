@@ -34,6 +34,7 @@ void *handle_client(void *arg);
 void register_user(const char *username, const char *password, ClientInfo *client);
 void login_user(const char *username, const char *password, ClientInfo *client);
 void edit_profile_self(const char *username, const char *new_value, bool is_password, ClientInfo *client);
+void edit_user(const char *target_user, const char *new_value, bool is_password, ClientInfo *client);
 void kick_user(const char *username, const char *channel, ClientInfo *client);
 
 void create_directory(const char *path, ClientInfo *client);
@@ -287,6 +288,19 @@ void handle_update(ClientInfo *cli) {
         }
         bool is_password = (strcmp(option, "-p") == 0);
         edit_profile_self(cli->logged_in_user, new_value, is_password, cli);
+    } else if (strcmp(type, "WHERE") == 0) {
+        char *target_user = strtok(NULL, " ");
+        char *option = strtok(NULL, " ");
+        char *new_value = strtok(NULL, " ");
+        if (target_user == NULL || option == NULL || new_value == NULL) {
+            char response[] = "Penggunaan perintah: EDIT WHERE <username> -u <new_username> atau -p <new_password>";
+            if (write(cli->socket, response, strlen(response)) < 0) {
+                perror("Gagal mengirim respons ke client");
+            }
+            return;
+        }
+        bool is_password = (strcmp(option, "-p") == 0);
+        edit_user(target_user, new_value, is_password, cli);
     } else {
         const char *response = "Format perintah EDIT tidak valid";
         write(cli->socket, response, strlen(response));
@@ -1253,6 +1267,112 @@ void edit_profile_self(const char *username, const char *new_value, bool is_pass
         }
     }
 }
+
+
+void edit_user(const char *target_user, const char *new_value, bool is_password, ClientInfo *client) {
+    FILE *file = fopen(USERS_FILE, "r+");
+    if (!file) {
+        char response[] = "Gagal membuka file users.csv";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    char line[256];
+    char temp_path[256];
+    snprintf(temp_path, sizeof(temp_path), "/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv");
+    FILE *temp_file = fopen(temp_path, "w+");
+    if (!temp_file) {
+        char response[] = "Gagal membuat file sementara";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        fclose(file);
+        return;
+    }
+
+    bool is_root = false;
+    bool found = false;
+    bool name_exists = false;
+
+    while (fgets(line, sizeof(line), file)) {
+        char *user_id = strtok(line, ",");
+        char *user_name = strtok(NULL, ",");
+        char *hash = strtok(NULL, ",");
+        char *role = strtok(NULL, ",");
+
+        if (user_name && strcmp(user_name, client->logged_in_user) == 0) {
+            if (strstr(role, "ROOT") != NULL) {
+                is_root = true;
+            }
+        }
+
+        if (user_name && strcmp(user_name, new_value) == 0 && !is_password) {
+            name_exists = true;
+            break;
+        }
+
+        if (user_name && strcmp(user_name, target_user) == 0) {
+            found = true;
+            if (is_password) {
+                char salt[64];
+                snprintf(salt, sizeof(salt), "$2y$12$%.22s", "rahasia0123456789qwertyu");
+                char new_hash[BCRYPT_HASHSIZE];
+                bcrypt_hashpw(new_value, salt,new_hash);
+
+                fprintf(temp_file, "%s,%s,%s,%s", user_id, user_name, new_hash, role);
+            } else {
+                fprintf(temp_file, "%s,%s,%s,%s", user_id, new_value, hash, role);
+            }
+        } else {
+            fprintf(temp_file, "%s,%s,%s,%s", user_id, user_name, hash, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp_file);
+
+    if (!is_root) {
+        remove(temp_path);
+        char response[] = "Anda tidak memiliki izin untuk mengedit user";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    if (name_exists) {
+        remove(temp_path);
+        char response[] = "Username sudah digunakan";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    if (found) {
+        remove(USERS_FILE);
+        rename(temp_path, USERS_FILE);
+
+        char response[100];
+        if (is_password) {
+            snprintf(response, sizeof(response), "Password %s berhasil diubah", target_user);
+        } else {
+            snprintf(response, sizeof(response), "%s berhasil diubah menjadi %s", target_user, new_value);
+        }
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+    } else {
+        remove(temp_path);
+        char response[] = "User tidak ditemukan";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+    }
+}
+
 
 // J (Join) handlers
 void verify_key(const char *username, const char *channel, const char *key, ClientInfo *client) {
