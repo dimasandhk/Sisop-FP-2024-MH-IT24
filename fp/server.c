@@ -35,7 +35,8 @@ void register_user(const char *username, const char *password, ClientInfo *clien
 void login_user(const char *username, const char *password, ClientInfo *client);
 void edit_profile_self(const char *username, const char *new_value, bool is_password, ClientInfo *client);
 void edit_user(const char *target_user, const char *new_value, bool is_password, ClientInfo *client);
-void kick_user(const char *username, const char *channel, ClientInfo *client);
+void remove_user(const char *channel, const char *username, ClientInfo *client);
+void remove_user_root(const char *target_user, ClientInfo *client);
 
 void create_directory(const char *path, ClientInfo *client);
 void create_channel(const char *username, const char *channel, const char *key, ClientInfo *client);
@@ -57,7 +58,6 @@ void delete_all_rooms(const char *channel, ClientInfo *client);
 void log_activity(const char *channel, const char *message);
 
 void list_users_root(ClientInfo *client);
-void remove_user_root(const char *username, ClientInfo *client);
 
 void handle_exit(ClientInfo *client);
 
@@ -308,15 +308,35 @@ void handle_update(ClientInfo *cli) {
 }
 
 void handle_remove(ClientInfo *cli) {
-    char *type_or_username = strtok(NULL, " ");
-    char *username = NULL;
-
-    if (strcmp(type_or_username, "USER") == 0) {
-        username = strtok(NULL, " ");
-        kick_user(username, cli->logged_in_channel, cli);
+    char *token = strtok(NULL, " ");
+    if (token == NULL) {
+        char response[] = "Format perintah REMOVE tidak valid";
+        if (write(cli->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+    
+    if (strcmp(token, "USER") == 0) {
+        if(strlen(cli->logged_in_channel) == 0){
+            char response[] = "Anda belum bergabung dalam channel";
+            if (write(cli->socket, response, strlen(response)) < 0) {
+                perror("Gagal mengirim respons ke client");
+            }
+            return;
+        }
+        char *target_user = strtok(NULL, " ");
+        if (target_user == NULL) {
+            char response[] = "Penggunaan perintah: REMOVE USER <username>";
+            if (write(cli->socket, response, strlen(response)) < 0) {
+                perror("Gagal mengirim respons ke client");
+            }
+            return;
+        }
+        remove_user(cli->logged_in_channel, target_user, cli);
     } else {
-        username = type_or_username;
-        remove_user_root(username, cli);
+        char *target_user = token;
+        remove_user_root(target_user, cli);
     }
 }
 
@@ -506,132 +526,222 @@ void login_user(const char *username, const char *password, ClientInfo *client) 
     }
 }
 
-// K (Kick) handler
-void kick_user(const char *username, const char *channel, ClientInfo *client) {
-    // check whether the user who kicked is ROOT or ADMIN
-    FILE *users_file = fopen(USERS_FILE, "r");
-    if (!users_file) {
-        send_response(client, "Unable to open users.csv file");
+// R (Remove) handler
+void remove_user(const char *channel, const char *target_user, ClientInfo *client) {
+    char auth_path[256];
+    snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
+    FILE *auth_file = fopen(auth_path, "r");
+    if (!auth_file) {
+        char response[] = "Gagal membuka file auth.csv";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
         return;
     }
 
-    char line[256];
     bool is_admin = false;
+    bool is_root = false;
+    char auth_line[256];
 
-    while (fgets(line, sizeof(line), users_file)) {
-        char *token = strtok(line, ",");
+    while (fgets(auth_line, sizeof(auth_line), auth_file)) {
+        char *token = strtok(auth_line, ",");
+        if (token == NULL) continue;
         token = strtok(NULL, ",");
-        if (token && strcmp(token, client->logged_in_user) == 0) {
+        if (token == NULL) continue;
+        if (strcmp(token, client->logged_in_user) == 0) {
             token = strtok(NULL, ",");
-            token = strtok(NULL, ",");
-            if (strstr(token, "ROOT") != NULL) {
+            if (strstr(token, "ROOT") != NULL){
+                is_root = true;
+            } else if (strstr(token, "ADMIN") != NULL) {
                 is_admin = true;
             }
             break;
         }
     }
 
-    fclose(users_file);
-
-    if (!is_admin) {
-        char auth_path[256];
-        snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-        FILE *auth_file = fopen(auth_path, "r");
-        if (!auth_file) {
-            send_response(client, "Unable to open auth.csv file");
-            return;
-        }
-
-        while (fgets(line, sizeof(line), auth_file)) {
-            char *token = strtok(line, ",");
-            if (token == NULL) continue;
-            token = strtok(NULL, ",");
-            if (token == NULL) continue;
-            if (strcmp(token, client->logged_in_user) == 0) {
-                token = strtok(NULL, ",");
-                if (strstr(token, "ADMIN") != NULL) {
-                    is_admin = true;
-                }
-                break;
-            }
-        }
-
-        fclose(auth_file);
-    }
-
-    if (!is_admin) {
-        send_response(client, "Anda tidak memiliki izin untuk mengeluarkan pengguna");
-        return;
-    }
-
-    // Check if the user to be kicked is an admin or root
-    char auth_path[256];
-    snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", channel);
-    FILE *auth_file = fopen(auth_path, "r");
-    if (!auth_file) {
-        send_response(client, "Unable to open auth.csv file");
-        return;
-    }
-
-    bool is_root = false;
-    while (fgets(line, sizeof(line), auth_file)) {
-        char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        token = strtok(NULL, ",");
-        if (token == NULL) continue;
-        if (strcmp(token, username) == 0) {
-            token = strtok(NULL, ",");
-            if (strstr(token, "ROOT") != NULL) {
-                is_root = true;
-            }
-            break;
-        }
-    }
-
     fclose(auth_file);
 
-    if (is_root) {
-        send_response(client, "Anda tidak dapat mengeluarkan ROOT");
+    if (!is_admin && !is_root) {
+        char response[] = "Anda tidak memiliki izin untuk menghapus user dari channel";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
         return;
     }
 
-    // Remove the user from the auth.csv file
+    // Open auth.csv to remove the target user
+    auth_file = fopen(auth_path, "r+");
+    if (!auth_file) {
+        char response[] = "Gagal membuka file auth.csv";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
     char temp_path[256];
     snprintf(temp_path, sizeof(temp_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth_temp.csv", channel);
     FILE *temp_file = fopen(temp_path, "w+");
     if (!temp_file) {
-        send_response(client, "Unable to create temp file");
+        char response[] = "Gagal membuat file sementara";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        fclose(auth_file);
         return;
     }
 
-    auth_file = fopen(auth_path, "r");
-    if (!auth_file) {
-        send_response(client, "Unable to open auth.csv file");
-        return;
-    }
+    bool found = false;
+    bool removable = true;
+    char line[256];
 
     while (fgets(line, sizeof(line), auth_file)) {
-        char *token = strtok(line, ",");
-        if (token == NULL) continue;
-        if (strcmp(token, username) == 0) continue;
-        fprintf(temp_file, "%s", line);
+        char *user_id = strtok(line, ",");
+        char *user_name = strtok(NULL, ",");
+        char *role = strtok(NULL, ",");
+
+        if (user_name && strcmp(user_name, target_user) == 0) {
+            found = true;
+            if (strstr(role, "ROOT") != NULL || strstr(role, "ADMIN") != NULL) {
+                removable = false;
+            } else {
+                continue;  // Skip writing this user to temp file
+            }
+        }
+        fprintf(temp_file, "%s,%s,%s", user_id, user_name, role);
     }
 
     fclose(auth_file);
     fclose(temp_file);
 
-    if (remove(auth_path) != 0) {
-        send_response(client, "Unable to remove auth.csv file");
+    if (!found) {
+        remove(temp_path);
+        char response[] = "User tidak ditemukan di channel ini";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
         return;
     }
 
+    if (!removable) {
+        remove(temp_path);
+        char response[] = "Anda tidak bisa menghapus ROOT atau ADMIN dari channel";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    remove(auth_path);
+    rename(temp_path, auth_path);
+
     char response[100];
-    snprintf(response, sizeof(response), "%s berhasil dikeluarkan dari channel", username);
-    send_response(client, response);
+    snprintf(response, sizeof(response), "%s dikick", target_user);
+    if (write(client->socket, response, strlen(response)) < 0) {
+        perror("Gagal mengirim respons ke client");
+    }
 
     char log_message[100];
-    snprintf(log_message, sizeof(log_message), "ROOT mengeluarkan %s dari channel", username);
+    if(is_root){
+        snprintf(log_message, sizeof(log_message), "ROOT kick %s", target_user);
+    } else {
+        snprintf(log_message, sizeof(log_message), "ADMIN kick %s", target_user);
+    }
     log_activity(channel, log_message);
+}
+
+void remove_user_root(const char *target_user, ClientInfo *client) {
+    FILE *rootfile = fopen(USERS_FILE, "r");
+    if (!rootfile) {
+        char response[] = "Gagal membuka file users.csv";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    bool is_root = false;
+    char line[256];
+
+    while (fgets(line, sizeof(line), rootfile)) {
+        char *token = strtok(line, ",");
+        token = strtok(NULL, ",");
+        if (token && strcmp(token, client->logged_in_user) == 0) {
+            token = strtok(NULL, ",");
+            token = strtok(NULL, ",");
+            if (strstr(token, "ROOT") != NULL) {
+                is_root = true;
+                break;
+            }
+        }
+    }
+
+    if (!is_root) {
+        char response[] = "Anda tidak memiliki izin untuk menghapus user secara permanen";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        fclose(rootfile);
+        return;
+    }
+
+    fclose(rootfile);
+
+    FILE *file = fopen(USERS_FILE, "r");
+    if (!file) {
+        char response[] = "Gagal membuka file users.csv";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        fclose(file);
+        return;
+    }
+
+    char temp_path[256];
+    snprintf(temp_path, sizeof(temp_path), "/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv");
+    FILE *temp_file = fopen(temp_path, "w+");
+    if (!temp_file) {
+        char response[] = "Gagal membuat file sementara";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        fclose(temp_file);
+        return;
+    }
+
+    bool found = false;
+
+    while (fgets(line, sizeof(line), file)) {
+        char *user_id = strtok(line, ",");
+        char *user_name = strtok(NULL, ",");
+        char *hash = strtok(NULL, ",");
+        char *role = strtok(NULL, ",");
+
+        if (user_name && strcmp(user_name, target_user) == 0) {
+            found = true;
+            continue;  // Skip writing this user to temp file
+        }
+        fprintf(temp_file, "%s,%s,%s,%s", user_id, user_name, hash, role);
+    }
+
+    fclose(file);
+    fclose(temp_file);
+
+    if (found) {
+        remove(USERS_FILE);
+        rename(temp_path, USERS_FILE);
+        char response[100];
+        snprintf(response, sizeof(response), "%s berhasil dihapus", target_user);
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+    } else {
+        remove(temp_path);
+        char response[] = "User tidak ditemukan";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+    }
 }
 
 // C (Create) Room & Channel handlers
@@ -1876,88 +1986,6 @@ void delete_all_rooms(const char *channel, ClientInfo *client) {
     char log_message[100];
     snprintf(log_message, sizeof(log_message), "User %s menghapus semua room", client->logged_in_user);
     log_activity(channel, log_message);
-}
-
-// R (Remove) handlers
-void remove_user_root(const char *username, ClientInfo *client) {
-    // Check if the user that want to remove is ROOT
-    FILE *users_file = fopen(USERS_FILE, "r");
-    if (!users_file) {
-        const char *response = "Unable to open users.csv file";
-        write(client->socket, response, strlen(response));
-        return;
-    }
-
-    char line[256];
-    while (fgets(line, sizeof(line), users_file)) {
-        char *token = strtok(line, ",");
-        token = strtok(NULL, ",");
-        if (token && strcmp(token, client->logged_in_user) == 0) {
-            token = strtok(NULL, ",");
-            token = strtok(NULL, ",");
-            if (strstr(token, "ROOT") != NULL) {
-                const char *response = "Kamu bukan root!";
-                write(client->socket, response, strlen(response));
-                fclose(users_file);
-                return;
-            }
-            break;
-        }
-    }
-
-    fclose(users_file);
-
-    // Remove the user from all channels and users.csv
-    FILE *users_temp = fopen("/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv", "w");
-    if (!users_temp) {
-        const char *response = "Unable to create temp file";
-        write(client->socket, response, strlen(response));
-        return;
-    }
-
-    FILE *users_file2 = fopen(USERS_FILE, "r");
-    if (!users_file2) {
-        const char *response = "Unable to open users.csv file";
-        write(client->socket, response, strlen(response));
-        fclose(users_temp);
-        return;
-    }
-
-    char user_id[10];
-    char user_line[256];
-    bool user_found = false;
-
-    while (fgets(user_line, sizeof(user_line), users_file2)) {
-        char *token = strtok(user_line, ",");
-        strcpy(user_id, token);
-        token = strtok(NULL, ",");
-        if (token && strcmp(token, username) == 0) {
-            user_found = true;
-            break;
-        }
-    }
-
-    fclose(users_file2);
-
-    if (!user_found) {
-        const char *response = "User tidak ditemukan";
-        write(client->socket, response, strlen(response));
-        fclose(users_temp);
-        return;
-    }
-
-    FILE *channels_file = fopen(CHANNELS_FILE, "r");
-    if (!channels_file) {
-        const char *response = "Unable to open channels.csv file";
-        write(client->socket, response, strlen(response));
-        fclose(users_temp);
-        return;
-    }
-
-    
-
-    const char *response = "User berhasil dihapus";
-    write(client->socket, response, strlen(response));
 }
 
 // Other handlers
