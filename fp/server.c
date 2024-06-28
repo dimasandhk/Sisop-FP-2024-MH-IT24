@@ -33,6 +33,7 @@ void *handle_client(void *arg);
 
 void register_user(const char *username, const char *password, ClientInfo *client);
 void login_user(const char *username, const char *password, ClientInfo *client);
+void edit_profile_self(const char *username, const char *new_value, bool is_password, ClientInfo *client);
 void kick_user(const char *username, const char *channel, ClientInfo *client);
 
 void create_directory(const char *path, ClientInfo *client);
@@ -273,6 +274,19 @@ void handle_update(ClientInfo *cli) {
             const char *response = "Penggunaan perintah: EDIT ROOM <room> TO <new_room>";
             write(cli->socket, response, strlen(response));
         }
+    } else if (strcmp(type, "PROFILE") == 0) {
+        strtok(NULL, " ");  // skip "SELF"
+        char *option = strtok(NULL, " ");
+        char *new_value = strtok(NULL, " ");
+        if (option == NULL || new_value == NULL || strcmp(option, "-u") != 0 && strcmp(option, "-p") != 0) {
+            char response[] = "Penggunaan perintah: EDIT PROFILE SELF -u <new_username> atau -p <new_password>";
+            if (write(cli->socket, response, strlen(response)) < 0) {
+                perror("Gagal mengirim respons ke client");
+            }
+            return;
+        }
+        bool is_password = (strcmp(option, "-p") == 0);
+        edit_profile_self(cli->logged_in_user, new_value, is_password, cli);
     } else {
         const char *response = "Format perintah EDIT tidak valid";
         write(cli->socket, response, strlen(response));
@@ -1151,6 +1165,93 @@ void update_room(const char *channel, const char *room, const char *new_room, Cl
     if (write(client->socket, response, strlen(response)) < 0) {
         perror("Unable to send response to client");
     }
+
+    char log_message[100];
+    snprintf(log_message, sizeof(log_message), "ROOT mengubah room %s menjadi %s", room, new_room);
+    log_activity(channel, log_message);
+}
+
+void edit_profile_self(const char *username, const char *new_value, bool is_password, ClientInfo *client) {
+    FILE *file = fopen(USERS_FILE, "r+");
+    if (!file) {
+        char response[] = "Gagal membuka file users.csv";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    char line[256];
+    char temp_path[256];
+    snprintf(temp_path, sizeof(temp_path), "/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv");
+    FILE *temp_file = fopen(temp_path, "w");
+    if (!temp_file) {
+        char response[] = "Gagal membuat file sementara";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        fclose(file);
+        return;
+    }
+
+    bool found = false;
+    bool name_exists = false;
+    while (fgets(line, sizeof(line), file)) {
+        char *user_id = strtok(line, ",");
+        char *user_name = strtok(NULL, ",");
+        char *hash = strtok(NULL, ",");
+        char *role = strtok(NULL, ",");
+
+        if (user_name && strcmp(user_name, new_value) == 0 && !is_password) {
+            name_exists = true;
+            break;
+        }
+
+        if (user_name && strcmp(user_name, username) == 0) {
+            found = true;
+            if (is_password) {
+                char salt[64];
+                snprintf(salt, sizeof(salt), "$2y$12$%.22s", "rahasia0123456789qwertyu");
+                char new_hash[BCRYPT_HASHSIZE];
+                bcrypt_hashpw(new_value, salt,new_hash);
+                
+                fprintf(temp_file, "%s,%s,%s,%s", user_id, user_name, new_hash, role);
+            } else {
+                fprintf(temp_file, "%s,%s,%s,%s", user_id, new_value, hash, role);
+                snprintf(client->logged_in_user, sizeof(client->logged_in_user), "%s", new_value);
+            }
+        } else {
+            fprintf(temp_file, "%s,%s,%s,%s", user_id, user_name, hash, role);
+        }
+    }
+
+    fclose(file);
+    fclose(temp_file);
+
+    if (name_exists) {
+        remove(temp_path);
+        char response[] = "Username sudah digunakan";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+        return;
+    }
+
+    if (found) {
+        remove(USERS_FILE);
+        rename(temp_path, USERS_FILE);
+        char response[100];
+        snprintf(response, sizeof(response), is_password ? "Password diupdate" : "Profil diupdate");
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+    } else {
+        remove(temp_path);
+        char response[] = "User tidak ditemukan";
+        if (write(client->socket, response, strlen(response)) < 0) {
+            perror("Gagal mengirim respons ke client");
+        }
+    }
 }
 
 // J (Join) handlers
@@ -1659,7 +1760,7 @@ void delete_all_rooms(const char *channel, ClientInfo *client) {
 
 // R (Remove) handlers
 void remove_user_root(const char *username, ClientInfo *client) {
-    // Check if the user is ROOT
+    // Check if the user that want to remove is ROOT
     FILE *users_file = fopen(USERS_FILE, "r");
     if (!users_file) {
         const char *response = "Unable to open users.csv file";
@@ -1668,20 +1769,17 @@ void remove_user_root(const char *username, ClientInfo *client) {
     }
 
     char line[256];
-    char user_id[10];
-    bool is_root = false;
-
     while (fgets(line, sizeof(line), users_file)) {
         char *token = strtok(line, ",");
-        strcpy(user_id, token);
         token = strtok(NULL, ",");
-        char *name = token;
-        if (token && strstr(name, username) != NULL) {
+        if (token && strcmp(token, client->logged_in_user) == 0) {
             token = strtok(NULL, ",");
             token = strtok(NULL, ",");
-            char *role = token;
-            if (strstr(role, "ROOT") != NULL) {
-                is_root = true;
+            if (strstr(token, "ROOT") != NULL) {
+                const char *response = "Kamu bukan root!";
+                write(client->socket, response, strlen(response));
+                fclose(users_file);
+                return;
             }
             break;
         }
@@ -1689,23 +1787,29 @@ void remove_user_root(const char *username, ClientInfo *client) {
 
     fclose(users_file);
 
-    if (!is_root) {
-        const char *response = "User bukan ROOT";
+    // Remove the user from all channels and users.csv
+    FILE *users_temp = fopen("/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv", "w");
+    if (!users_temp) {
+        const char *response = "Unable to create temp file";
         write(client->socket, response, strlen(response));
         return;
     }
 
-    // Check if the user to be removed is ROOT
-    users_file = fopen(USERS_FILE, "r");
-    if (!users_file) {
+    FILE *users_file2 = fopen(USERS_FILE, "r");
+    if (!users_file2) {
         const char *response = "Unable to open users.csv file";
         write(client->socket, response, strlen(response));
+        fclose(users_temp);
         return;
     }
 
+    char user_id[10];
+    char user_line[256];
     bool user_found = false;
-    while (fgets(line, sizeof(line), users_file)) {
-        char *token = strtok(line, ",");
+
+    while (fgets(user_line, sizeof(user_line), users_file2)) {
+        char *token = strtok(user_line, ",");
+        strcpy(user_id, token);
         token = strtok(NULL, ",");
         if (token && strcmp(token, username) == 0) {
             user_found = true;
@@ -1713,84 +1817,24 @@ void remove_user_root(const char *username, ClientInfo *client) {
         }
     }
 
-    fclose(users_file);
+    fclose(users_file2);
 
     if (!user_found) {
         const char *response = "User tidak ditemukan";
         write(client->socket, response, strlen(response));
+        fclose(users_temp);
         return;
     }
 
-    // Remove the user from users.csv
-    FILE *temp_file = fopen("/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv", "w");
-    if (!temp_file) {
-        const char *response = "Unable to create temp file";
+    FILE *channels_file = fopen(CHANNELS_FILE, "r");
+    if (!channels_file) {
+        const char *response = "Unable to open channels.csv file";
         write(client->socket, response, strlen(response));
+        fclose(users_temp);
         return;
     }
 
-    users_file = fopen(USERS_FILE, "r");
-    if (!users_file) {
-        const char *response = "Unable to open users.csv file";
-        write(client->socket, response, strlen(response));
-        fclose(temp_file);
-        return;
-    }
-
-    while (fgets(line, sizeof(line), users_file)) {
-        char *token = strtok(line, ",");
-        if (token && strcmp(token, user_id) != 0) {
-            fputs(line, temp_file);
-        }
-    }
-
-    fclose(users_file);
-    fclose(temp_file);
-
-    remove(USERS_FILE);
-    rename("/home/dim/uni/sisop/FP/DiscorIT/users_temp.csv", USERS_FILE);
-
-    // Remove the user from auth.csv in all channels
-    DIR *dir = opendir("/home/dim/uni/sisop/FP/DiscorIT");
-    if (!dir) {
-        const char *response = "Unable to open DiscorIT directory";
-        write(client->socket, response, strlen(response));
-        return;
-    }
     
-    struct dirent *entry;
-    struct stat entry_stat;
-    while ((entry = readdir(dir)) != NULL) {
-        if (S_ISDIR(entry_stat.st_mode) && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            char auth_path[256];
-            snprintf(auth_path, sizeof(auth_path), "/home/dim/uni/sisop/FP/DiscorIT/%s/admin/auth.csv", entry->d_name);
-            FILE *auth_file = fopen(auth_path, "r");
-            if (!auth_file) {
-                continue;
-            }
-
-            temp_file = fopen("/home/dim/uni/sisop/FP/DiscorIT/auth_temp.csv", "w");
-            if (!temp_file) {
-                fclose(auth_file);
-                continue;
-            }
-
-            while (fgets(line, sizeof(line), auth_file)) {
-                char *token = strtok(line, ",");
-                if (token && strcmp(token, user_id) != 0) {
-                    fputs(line, temp_file);
-                }
-            }
-
-            fclose(auth_file);
-            fclose(temp_file);
-
-            remove(auth_path);
-            rename("/home/dim/uni/sisop/FP/DiscorIT/auth_temp.csv", auth_path);
-        }
-    }
-
-    closedir(dir);
 
     const char *response = "User berhasil dihapus";
     write(client->socket, response, strlen(response));
